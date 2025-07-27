@@ -1,195 +1,51 @@
-# Large File Upload Proof-of-Concept
+# Large File Upload POC with Angular and Spring Boot
 
-A full-stack application demonstrating efficient large file upload capabilities using chunked upload technology. This project showcases how to handle extremely large files (50GB+) with features like pause, resume, retry, and real-time progress tracking.
+This project is a Proof-of-Concept (POC) demonstrating how to handle large file uploads efficiently and reliably in a modern web application using Angular for the frontend and Spring Boot for the backend. The key feature highlighted is the ability to pause and resume uploads, built on a robust chunking mechanism.
 
-## 🎯 Project Goals
+**Disclaimer:** This is a proof-of-concept and is **not production-ready**. It lacks crucial features like a persistent state layer and an authentication/authorization layer.
 
-This proof-of-concept was built to explore and demonstrate:
+## Motivation
 
-- **Chunked File Upload**: Breaking large files into manageable chunks for reliable transmission
-- **Memory Efficiency**: Handling massive files without OutOfMemory errors
-- **Reactive Programming**: Using Spring WebFlux for non-blocking, scalable backend operations
-- **Real-time Progress**: Live upload progress tracking and status updates
-- **Multiple Upload Methods**: Supporting different upload strategies (multipart, binary, reactive)
-- **Resilient Uploads**: Pause, resume, and retry capabilities for interrupted uploads
-- **Modern Web Technologies**: Angular frontend with Web Workers for non-blocking UI
+Uploading large files presents several challenges in web development, including network instability, server limitations, and poor user experience due to frozen interfaces. This project was built to explore and showcase a solution to these problems. It serves as a practical guide and a starting point for developers looking to implement a resilient file upload system where users can upload gigabytes of data without fear of a single network glitch forcing them to restart from scratch.
 
-## 🏗️ Architecture
+## High-Level Architecture
 
-### Backend (Spring Boot + WebFlux)
-- **Framework**: Spring Boot 3.5.4 with Spring WebFlux
-- **Java Version**: JDK 17
-- **Build Tool**: Maven
-- **Key Features**:
-  - Reactive, non-blocking file processing
-  - Multiple upload endpoints (multipart, binary, reactive)
-  - Chunk-based file assembly
-  - Upload status tracking
-  - Swagger API documentation
+The system is composed of two main parts: a client-side application (Frontend) and a server-side application (Backend).
 
 ### Frontend (Angular)
-- **Framework**: Angular 19
-- **Language**: TypeScript
-- **UI Library**: Angular Material
-- **Key Features**:
-  - Drag-and-drop file selection
-  - Real-time upload progress
-  - Web Workers for background processing
-  - Multiple upload service implementations
-  - Responsive Material Design UI
 
-## 🚀 Features
+The frontend is a standalone Angular application that serves as the user interface for the file upload process.
 
-### Core Upload Capabilities
-- ✅ **Chunked Upload**: Files split into 5MB chunks for reliable transmission
-- ✅ **Multiple Endpoints**: Support for multipart, binary, and reactive upload methods
-- ✅ **Progress Tracking**: Real-time progress updates with chunk-level granularity
-- ✅ **Status Management**: Track upload states (pending, uploading, completed, failed)
-- ✅ **Memory Efficient**: Stream-based processing to handle files larger than available RAM
+-   **UI/UX:** It provides a clean and intuitive interface for users to select, monitor, and manage their file uploads.
+-   **Chunking:** Before an upload begins, the selected file is divided into smaller, manageable chunks. This is the foundation for the pause/resume capability.
+-   **Performance:** To ensure the UI remains responsive, the computationally intensive tasks of file slicing are offloaded to a **Web Worker**. This prevents the main browser thread from becoming blocked, even when processing very large files.
+-   **Communication:** It communicates with the backend via a RESTful API to send the file chunks and manage the upload lifecycle.
 
-### Advanced Features
-- ✅ **Web Workers**: Background processing to keep UI responsive during uploads
-- ✅ **Concurrent Uploads**: Multiple files can be uploaded simultaneously
-- ✅ **Upload Resume**: Ability to resume interrupted uploads (architecture ready)
-- ✅ **Error Handling**: Comprehensive error handling with detailed logging
-- ✅ **CORS Support**: Configured for cross-origin requests during development
+For more details on the frontend implementation, please see the [frontend/README.md](frontend/README.md).
 
-### Developer Experience
-- ✅ **API Documentation**: Swagger UI available at `/swagger-ui.html`
-- ✅ **Comprehensive Logging**: Detailed logging for debugging and monitoring
-- ✅ **Hot Reload**: Development servers with live reload capabilities
-- ✅ **Type Safety**: Full TypeScript implementation in frontend
+### Backend (Spring Boot)
 
-## 📁 Project Structure
+The backend is a Spring Boot application that exposes a REST API to handle the file upload logic.
 
-```
-large-upload/
-├── backend/                 # Spring Boot WebFlux application
-│   ├── src/main/java/
-│   │   └── com/example/largeupload/
-│   │       ├── controller/  # REST controllers
-│   │       ├── service/     # Business logic
-│   │       ├── model/       # Data models
-│   │       └── exception/   # Custom exceptions
-│   ├── src/main/resources/
-│   │   └── application.properties
-│   └── pom.xml
-├── frontend/                # Angular application
-│   ├── src/app/
-│   │   ├── services/        # Upload services
-│   │   ├── models/          # TypeScript models
-│   │   ├── upload-modal/    # File selection modal
-│   │   ├── upload-button/   # Upload trigger component
-│   │   ├── uploads-table/   # Progress tracking table
-│   │   └── upload.worker.ts # Web Worker for background processing
-│   ├── angular.json
-│   └── package.json
-└── uploads/                 # File storage directory (created at runtime)
-```
+-   **Chunk Handling:** It receives the individual file chunks from the frontend.
+-   **Reassembly:** It temporarily stores these chunks and, once all chunks for a specific file have been received, it reassembles them into the complete, original file.
+-   **State Management:** It maintains the state of each upload, tracking which chunks have been successfully received.
 
-## 🛠️ Technology Stack
+For more details on the backend implementation, please see the [backend/README.md](backend/README.md).
 
-### Backend Technologies
-- **Spring Boot 3.5.4** - Application framework
-- **Spring WebFlux** - Reactive web framework
-- **Maven** - Dependency management and build tool
-- **Swagger/OpenAPI** - API documentation
-- **SLF4J + Logback** - Logging framework
+## Future Enhancements
 
-### Frontend Technologies
-- **Angular 19** - Frontend framework
-- **TypeScript** - Programming language
-- **Angular Material** - UI component library
-- **RxJS** - Reactive programming library
-- **Web Workers** - Background processing
-- **Angular CLI** - Development tooling
+This project serves as a solid foundation, but requires several enhancements for production use:
 
-## 🚦 Getting Started
+*   **Persistent State:** Currently, the upload state is stored in memory. For a production environment, this is a critical flaw. This should be replaced with a persistent storage solution like **Redis** or a database to ensure that uploads can be resumed even after a server restart or across multiple server instances.
+*   **Authentication & Authorization:** There is currently no security layer. A production system would need a robust authentication and authorization mechanism to control who can upload files and to secure the endpoints.
+*   **Scalability:** For very large-scale applications, consider using a distributed storage system like Amazon S3 for storing the final assembled files.
+*   **Configuration:** Make the chunk size and other parameters configurable through the application's settings instead of being hardcoded.
 
-### Prerequisites
-- **Java 17** or higher
-- **Node.js 18** or higher
-- **Maven 3.6** or higher
-- **Angular CLI** (optional, for development)
+## Community and Contributions
 
-### Backend Setup
-```bash
-cd backend
-mvn clean install
-mvn spring-boot:run
-```
-The backend will start on `http://localhost:8080`
+This project is open-source and community-driven. We welcome contributions, ideas, and feedback from everyone. If you have suggestions for improvements, new features, or have found a bug, please feel free to open an issue or submit a pull request.
 
-### Frontend Setup
-```bash
-cd frontend
-npm install
-npm start
-```
-The frontend will start on `http://localhost:4200`
+## License
 
-## 📚 API Documentation
-
-Once the backend is running, visit:
-- **Swagger UI**: `http://localhost:8080/swagger-ui.html`
-- **OpenAPI Spec**: `http://localhost:8080/v3/api-docs`
-
-### Key Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/upload` | Upload file chunk (multipart) |
-| `POST` | `/upload/reactive` | Upload file chunk (reactive) |
-| `POST` | `/upload/binary` | Upload file chunk (binary) |
-| `GET` | `/upload/{fileId}` | Get upload status for specific file |
-| `GET` | `/upload` | Get status of all uploads |
-
-## 🔧 Configuration
-
-### Backend Configuration (`application.properties`)
-```properties
-spring.servlet.multipart.max-file-size=100MB
-spring.servlet.multipart.max-request-size=100MB
-logging.level.com.example.largeupload=DEBUG
-```
-
-### Frontend Configuration
-- **Chunk Size**: 5MB (configurable in `upload.service.ts`)
-- **Backend URL**: `http://localhost:8080/upload`
-- **CORS Origins**: Configured for `localhost:4200` and `localhost:4201`
-
-## 🧪 Testing
-
-The application includes comprehensive testing capabilities:
-- **Unit Tests**: Both backend and frontend include unit test suites
-- **Integration Testing**: API endpoints can be tested via Swagger UI
-- **Manual Testing**: Upload various file sizes to test chunking behavior
-
-## 🎯 Use Cases
-
-This proof-of-concept demonstrates solutions for:
-- **Media Upload Platforms**: Video, audio, and image upload services
-- **Document Management**: Large document and archive uploads
-- **Data Transfer Applications**: Scientific data, backups, and bulk transfers
-- **Cloud Storage Services**: Reliable file upload with resume capabilities
-- **Enterprise Applications**: Internal file sharing and collaboration tools
-
-## 🔮 Future Enhancements
-
-Potential improvements and extensions:
-- [ ] **Authentication & Authorization**: User management and access control
-- [ ] **File Deduplication**: Avoid storing duplicate files
-- [ ] **Cloud Storage Integration**: AWS S3, Google Cloud Storage support
-- [ ] **Upload Scheduling**: Queue and schedule large uploads
-- [ ] **Bandwidth Throttling**: Control upload speed and resource usage
-- [ ] **File Validation**: Virus scanning and content validation
-- [ ] **Metadata Extraction**: Automatic file metadata extraction
-- [ ] **Multi-tenant Support**: Isolated storage per organization
-
-## 📄 License
-
-This project is a proof-of-concept for educational and demonstration purposes.
-
-## 🤝 Contributing
-
-This is a proof-of-concept project. Feel free to fork and experiment with different approaches to large file upload challenges.
+This project is licensed under the MIT License. See the accompanying `LICENSE` file for details.
