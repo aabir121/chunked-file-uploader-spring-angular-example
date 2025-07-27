@@ -1,6 +1,7 @@
 package com.example.largeupload.service;
 
 import com.example.largeupload.exception.FileStorageException;
+import com.example.largeupload.util.DiskSpaceUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -73,10 +74,28 @@ public class FileAssemblyService {
      */
     public void assembleChunksToFile(Path[] chunkFiles, Path targetFile, String fileId) throws IOException {
         logger.debug("Assembling {} chunks to file: {}", chunkFiles.length, targetFile);
-        
-        try (FileChannel outputChannel = FileChannel.open(targetFile, 
-                StandardOpenOption.CREATE, 
-                StandardOpenOption.WRITE, 
+
+        // Calculate total size needed for assembly
+        long totalSizeNeeded = 0;
+        for (Path chunkFile : chunkFiles) {
+            if (Files.exists(chunkFile)) {
+                totalSizeNeeded += Files.size(chunkFile);
+            }
+        }
+
+        // Check disk space before starting assembly
+        try {
+            DiskSpaceUtil.validateDiskSpace(targetFile.getParent(), totalSizeNeeded,
+                "file assembly for fileId: " + fileId);
+        } catch (IOException diskSpaceEx) {
+            logger.error("Insufficient disk space for file assembly of fileId: {}, required: {} bytes",
+                        fileId, totalSizeNeeded, diskSpaceEx);
+            throw new FileStorageException("Insufficient disk space for file assembly", fileId, "ASSEMBLE", "INSUFFICIENT_DISK_SPACE", diskSpaceEx);
+        }
+
+        try (FileChannel outputChannel = FileChannel.open(targetFile,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.WRITE,
                 StandardOpenOption.TRUNCATE_EXISTING)) {
             
             long totalBytesWritten = 0;
@@ -108,6 +127,7 @@ public class FileAssemblyService {
             
         } catch (IOException e) {
             logger.error("Failed to assemble chunks for fileId: {} to file: {}", fileId, targetFile, e);
+
             // Clean up partially written file
             try {
                 if (Files.exists(targetFile)) {
@@ -117,6 +137,14 @@ public class FileAssemblyService {
             } catch (IOException cleanupEx) {
                 logger.warn("Failed to cleanup partially written file: {}", targetFile, cleanupEx);
             }
+
+            // Check if this is a disk space related error
+            if (DiskSpaceUtil.isInsufficientSpaceException(e)) {
+                logger.error("Disk space error detected during file assembly for fileId: {}", fileId);
+                logger.info(DiskSpaceUtil.getDiskSpaceInfo(targetFile.getParent()));
+                throw new FileStorageException("Insufficient disk space during file assembly", fileId, "ASSEMBLE", "INSUFFICIENT_DISK_SPACE", e);
+            }
+
             throw new FileStorageException("Failed to assemble file", fileId, "ASSEMBLE", e);
         }
     }

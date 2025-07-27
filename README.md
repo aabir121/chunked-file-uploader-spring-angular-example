@@ -49,3 +49,6 @@ This project is open-source and community-driven. We welcome contributions, idea
 ## License
 
 This project is licensed under the MIT License. See the accompanying [LICENSE](LICENSE) file for details.
+
+---
+*Note: This project was vibecoded via augment code.*

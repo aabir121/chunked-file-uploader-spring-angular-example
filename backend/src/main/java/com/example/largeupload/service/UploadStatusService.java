@@ -8,7 +8,9 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -28,6 +30,17 @@ public class UploadStatusService {
         return fileUploadStatusMap.computeIfAbsent(fileId, k -> {
             logger.debug("Creating new upload status for fileId: {} with {} total chunks", fileId, totalChunks);
             return new FileUploadStatus(fileId, totalChunks);
+        });
+    }
+
+    /**
+     * Gets or creates upload status for a file with additional metadata
+     */
+    public FileUploadStatus getOrCreateUploadStatus(String fileId, int totalChunks, String fileName, Long fileSize, Integer chunkSize) {
+        return fileUploadStatusMap.computeIfAbsent(fileId, k -> {
+            logger.debug("Creating new upload status for fileId: {} with {} total chunks, fileName: {}, fileSize: {}, chunkSize: {}",
+                        fileId, totalChunks, fileName, fileSize, chunkSize);
+            return new FileUploadStatus(fileId, totalChunks, fileName, fileSize, chunkSize);
         });
     }
 
@@ -67,8 +80,22 @@ public class UploadStatusService {
         FileUploadStatus status = fileUploadStatusMap.get(fileId);
         if (status != null) {
             status.addChunk(chunkNumber);
-            logger.debug("Added chunk {} to upload status for fileId: {}. Progress: {}/{}", 
+            logger.debug("Added chunk {} to upload status for fileId: {}. Progress: {}/{}",
                         chunkNumber, fileId, status.getReceivedChunks().size(), status.getTotalChunks());
+        } else {
+            logger.warn("Attempted to add chunk {} to non-existent upload status for fileId: {}", chunkNumber, fileId);
+        }
+    }
+
+    /**
+     * Updates upload status with a new chunk and its actual size
+     */
+    public void addChunk(String fileId, int chunkNumber, int chunkSize) {
+        FileUploadStatus status = fileUploadStatusMap.get(fileId);
+        if (status != null) {
+            status.addChunk(chunkNumber, chunkSize);
+            logger.debug("Added chunk {} (size: {} bytes) to upload status for fileId: {}. Progress: {}/{}",
+                        chunkNumber, chunkSize, fileId, status.getReceivedChunks().size(), status.getTotalChunks());
         } else {
             logger.warn("Attempted to add chunk {} to non-existent upload status for fileId: {}", chunkNumber, fileId);
         }
@@ -141,17 +168,11 @@ public class UploadStatusService {
     }
 
     /**
-     * Gets missing chunk numbers
+     * Gets missing chunk numbers as array (for backward compatibility)
      */
-    public int[] getMissingChunks(String fileId) {
-        FileUploadStatus status = fileUploadStatusMap.get(fileId);
-        if (status == null) {
-            return new int[0];
-        }
-
-        return java.util.stream.IntStream.range(0, status.getTotalChunks())
-                .filter(i -> !status.getReceivedChunks().contains(i))
-                .toArray();
+    public int[] getMissingChunksArray(String fileId) {
+        Set<Integer> missingChunks = getMissingChunks(fileId);
+        return missingChunks.stream().mapToInt(Integer::intValue).toArray();
     }
 
     /**
@@ -181,6 +202,90 @@ public class UploadStatusService {
             // For now, we'll log the warning but not update the count
             // In a production system, you might want to handle this differently
         }
+    }
+
+    /**
+     * Gets missing chunks for a specific file (for resume functionality)
+     */
+    public Set<Integer> getMissingChunks(String fileId) {
+        FileUploadStatus status = fileUploadStatusMap.get(fileId);
+        return status != null ? status.getMissingChunks() : Collections.emptySet();
+    }
+
+    /**
+     * Gets the next expected chunk for sequential upload
+     */
+    public int getNextExpectedChunk(String fileId) {
+        FileUploadStatus status = fileUploadStatusMap.get(fileId);
+        return status != null ? status.getNextExpectedChunk() : 0;
+    }
+
+    /**
+     * Checks if an upload can be resumed
+     */
+    public boolean canResume(String fileId) {
+        FileUploadStatus status = fileUploadStatusMap.get(fileId);
+        return status != null && status.canResume();
+    }
+
+    /**
+     * Gets upload progress percentage
+     */
+    public double getProgressPercentage(String fileId) {
+        FileUploadStatus status = fileUploadStatusMap.get(fileId);
+        return status != null ? status.getProgressPercentage() : 0.0;
+    }
+
+    /**
+     * Gets current upload speed in bytes per second
+     */
+    public Double getUploadSpeed(String fileId) {
+        FileUploadStatus status = fileUploadStatusMap.get(fileId);
+        return status != null ? status.getUploadSpeed() : 0.0;
+    }
+
+    /**
+     * Gets estimated remaining time in milliseconds
+     */
+    public Long getEstimatedRemainingTime(String fileId) {
+        FileUploadStatus status = fileUploadStatusMap.get(fileId);
+        return status != null ? status.getEstimatedRemainingTime() : null;
+    }
+
+    /**
+     * Updates file metadata for an existing upload
+     */
+    public void updateFileMetadata(String fileId, String fileName, Long fileSize, Integer chunkSize) {
+        FileUploadStatus status = fileUploadStatusMap.get(fileId);
+        if (status != null) {
+            if (fileName != null) {
+                status.setFileName(fileName);
+            }
+            if (fileSize != null) {
+                status.setFileSize(fileSize);
+            }
+            if (chunkSize != null) {
+                status.setChunkSize(chunkSize);
+            }
+            logger.debug("Updated metadata for fileId: {} - fileName: {}, fileSize: {}, chunkSize: {}",
+                        fileId, fileName, fileSize, chunkSize);
+        }
+    }
+
+    /**
+     * Gets all uploads that can be resumed
+     */
+    public Collection<FileUploadStatus> getResumableUploads() {
+        return fileUploadStatusMap.values().stream()
+                .filter(FileUploadStatus::canResume)
+                .collect(java.util.stream.Collectors.toList());
+    }
+
+    /**
+     * Reactive version of getResumableUploads
+     */
+    public Flux<FileUploadStatus> getResumableUploadsReactive() {
+        return Flux.fromIterable(getResumableUploads());
     }
 
     /**

@@ -62,8 +62,8 @@ public class FileStorageService {
         // Save the chunk
         chunkStorageService.saveChunk(fileId, chunkNumber, chunk);
 
-        // Update status
-        uploadStatusService.addChunk(fileId, chunkNumber);
+        // Update status with actual chunk size
+        uploadStatusService.addChunk(fileId, chunkNumber, chunk.length);
 
         logger.debug("Chunk {} saved for fileId: {}. Progress: {}/{}",
                     chunkNumber, fileId, uploadStatusService.getReceivedChunkCount(fileId), totalChunks);
@@ -88,7 +88,7 @@ public class FileStorageService {
         }
 
         if (!uploadStatusService.isUploadComplete(fileId)) {
-            int[] missingChunks = uploadStatusService.getMissingChunks(fileId);
+            int[] missingChunks = uploadStatusService.getMissingChunksArray(fileId);
             throw new IllegalStateException("Upload is not complete. Missing chunks: " + java.util.Arrays.toString(missingChunks));
         }
 
@@ -150,7 +150,7 @@ public class FileStorageService {
                     if (fileName != null && !fileName.trim().isEmpty()) {
                         uploadStatusService.setFileName(fileId, fileName);
                     }
-                    uploadStatusService.addChunk(fileId, chunkNumber);
+                    uploadStatusService.addChunk(fileId, chunkNumber, chunk.length);
                 })
                 .doOnSuccess(result -> logger.debug("Reactive chunk {} saved for fileId: {}", chunkNumber, fileId))
                 .doOnError(error -> {
@@ -189,6 +189,20 @@ public class FileStorageService {
     }
 
     /**
+     * Gets or creates upload status for a file
+     */
+    public FileUploadStatus getOrCreateUploadStatus(String fileId, int totalChunks) {
+        return uploadStatusService.getOrCreateUploadStatus(fileId, totalChunks);
+    }
+
+    /**
+     * Gets or creates upload status for a file with metadata
+     */
+    public FileUploadStatus getOrCreateUploadStatusWithMetadata(String fileId, int totalChunks, String fileName, Long fileSize, Integer chunkSize) {
+        return uploadStatusService.getOrCreateUploadStatus(fileId, totalChunks, fileName, fileSize, chunkSize);
+    }
+
+    /**
      * Reactive version of getUploadStatus
      */
     public Mono<FileUploadStatus> getUploadStatusReactive(String fileId) {
@@ -207,6 +221,20 @@ public class FileStorageService {
      */
     public Flux<FileUploadStatus> getAllUploadStatusesReactive() {
         return uploadStatusService.getAllUploadStatusesReactive();
+    }
+
+    /**
+     * Gets all resumable uploads
+     */
+    public Collection<FileUploadStatus> getResumableUploads() {
+        return uploadStatusService.getResumableUploads();
+    }
+
+    /**
+     * Reactive version of getResumableUploads
+     */
+    public Flux<FileUploadStatus> getResumableUploadsReactive() {
+        return uploadStatusService.getResumableUploadsReactive();
     }
 
     /**
@@ -236,7 +264,7 @@ public class FileStorageService {
      * Gets missing chunk numbers for a file
      */
     public int[] getMissingChunks(String fileId) {
-        return uploadStatusService.getMissingChunks(fileId);
+        return uploadStatusService.getMissingChunksArray(fileId);
     }
 
     /**

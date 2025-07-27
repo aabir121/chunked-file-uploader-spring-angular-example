@@ -22,6 +22,8 @@ A production-ready backend service for uploading extremely large files (50GB+) u
 - **Multiple upload methods**: Support for multipart form data, reactive streams, and binary uploads
 - **Efficient storage**: Chunks are immediately persisted to disk with streaming assembly to avoid memory issues
 - **Upload status tracking**: Real-time tracking of upload progress with detailed status information
+- **Resume functionality**: Browser refresh-resistant uploads with automatic resume capability
+- **Concurrent hashmap tracking**: Thread-safe in-memory tracking of all file uploads with progress monitoring
 - **Automatic file assembly**: Intelligent chunk combination with integrity validation
 - **Concurrent uploads**: Support for multiple simultaneous file uploads
 
@@ -34,6 +36,7 @@ A production-ready backend service for uploading extremely large files (50GB+) u
 
 ### Monitoring & Operations
 - **Upload statistics**: Detailed metrics on upload performance and status
+- **Resume analytics**: Upload speed tracking, progress percentages, and estimated completion times
 - **Structured logging**: Comprehensive logging with trace IDs for debugging
 - **Health monitoring**: Built-in health checks and metrics
 - **OpenAPI documentation**: Complete API documentation with Swagger UI
@@ -71,7 +74,7 @@ The application follows a clean architecture pattern with separated concerns:
 2. **FileStorageService**: Main orchestration service coordinating all operations
 3. **ChunkStorageService**: Handles chunk persistence and temporary file management
 4. **FileAssemblyService**: Manages chunk combination and final file creation
-5. **UploadStatusService**: Tracks upload progress and maintains state
+5. **UploadStatusService**: Tracks upload progress and maintains state using concurrent hashmap
 6. **UploadValidationService**: Validates requests, files, and enforces business rules
 
 ### Data Flow
@@ -79,9 +82,10 @@ The application follows a clean architecture pattern with separated concerns:
 1. **Chunk Upload**: Client uploads file chunks via REST API
 2. **Validation**: Request parameters and chunk data are validated
 3. **Storage**: Chunks are stored in temporary directories
-4. **Status Tracking**: Upload progress is updated in memory
-5. **Assembly**: When all chunks are received, they're combined into the final file
-6. **Cleanup**: Temporary files are removed after successful assembly
+4. **Status Tracking**: Upload progress is updated in concurrent hashmap with byte counting and metadata
+5. **Resume Support**: Missing chunks are tracked for browser refresh scenarios
+6. **Assembly**: When all chunks are received, they're combined into the final file
+7. **Cleanup**: Temporary files are removed after successful assembly
 
 ## Quick Start
 
@@ -236,13 +240,55 @@ GET /upload/{fileId}
   "fileId": "unique-file-123",
   "totalChunks": 5,
   "receivedChunks": [0, 1, 2],
+  "missingChunks": [3, 4],
+  "nextExpectedChunk": 3,
   "fileName": "document.pdf",
+  "fileSize": 10240,
+  "chunkSize": 2048,
+  "uploadedBytes": 6144,
+  "progressPercentage": 60.0,
+  "uploadSpeed": 1024.5,
+  "estimatedRemainingTime": 4000,
+  "canResume": true,
   "complete": false,
   "failed": false,
   "createdAt": "2024-01-15T10:30:00Z",
   "lastUpdated": "2024-01-15T10:35:00Z"
 }
 ```
+
+#### Resume Upload
+```http
+POST /upload/{fileId}/resume?totalChunks=5&fileName=document.pdf&fileSize=10240&chunkSize=2048
+```
+
+**Response:**
+```json
+{
+  "fileId": "unique-file-123",
+  "totalChunks": 5,
+  "receivedChunks": [0, 1, 2],
+  "missingChunks": [3, 4],
+  "nextExpectedChunk": 3,
+  "fileName": "document.pdf",
+  "fileSize": 10240,
+  "chunkSize": 2048,
+  "uploadedBytes": 6144,
+  "progressPercentage": 60.0,
+  "canResume": true,
+  "completed": false,
+  "failed": false,
+  "createdAt": "2024-01-15T10:30:00Z",
+  "lastUpdated": "2024-01-15T10:35:00Z"
+}
+```
+
+#### Get Resumable Uploads
+```http
+GET /upload/resumable
+```
+
+**Response:** Array of upload statuses that can be resumed (not completed and not failed).
 
 #### Complete Upload
 ```http
@@ -261,12 +307,20 @@ POST /upload/test
 
 ### Upload Workflow
 
+#### New Upload
 1. **Initialize Upload**: Generate a unique `fileId` for your file
 2. **Calculate Chunks**: Divide your file into chunks (recommended: 5-10MB per chunk)
 3. **Upload Chunks**: Send each chunk with its metadata
 4. **Monitor Progress**: Check upload status as needed
 5. **Complete Upload**: Trigger file assembly when all chunks are uploaded
 6. **Verify Result**: Check that the final file was created successfully
+
+#### Resume Upload (Browser Refresh Scenario)
+1. **Check Resume Status**: Call `POST /upload/{fileId}/resume` with file metadata
+2. **Identify Missing Chunks**: Response includes `missingChunks` array
+3. **Resume Upload**: Upload only the missing chunks
+4. **Monitor Progress**: Track progress with real-time statistics
+5. **Complete Upload**: Trigger file assembly when all chunks are uploaded
 
 ### Error Responses
 
@@ -322,14 +376,17 @@ mvn test -Drun.performance.tests=true -Dtest="*PerformanceTest"
 
 #### Unit Tests
 - **Service Layer Tests**: Comprehensive testing of all service classes
+- **Resume Functionality Tests**: Testing upload tracking, missing chunk detection, and resume capabilities
+- **Concurrent Upload Tests**: Testing thread-safe operations with concurrent hashmap
 - **Validation Tests**: Testing of all validation rules and edge cases
 - **Error Handling Tests**: Testing of exception scenarios and error responses
 
 #### Integration Tests
 - **Complete Upload Workflow**: End-to-end testing of file upload process
+- **Resume Upload Workflow**: Testing browser refresh scenarios and upload resumption
 - **Concurrent Upload Testing**: Testing multiple simultaneous uploads
 - **Error Scenario Testing**: Testing various failure conditions
-- **API Endpoint Testing**: Testing all REST endpoints
+- **API Endpoint Testing**: Testing all REST endpoints including resume endpoints
 
 #### Performance Tests
 - **Large File Upload**: Testing with 50MB+ files
@@ -407,7 +464,8 @@ java -Xmx4g -Xms2g \
 **Cause**: Not all chunks were successfully uploaded
 **Solution**:
 - Check upload status to identify missing chunks: `GET /upload/{fileId}`
-- Re-upload missing chunks
+- Use resume endpoint to get detailed missing chunk information: `POST /upload/{fileId}/resume`
+- Re-upload missing chunks using the `missingChunks` array from the response
 - Verify chunk numbering starts from 0
 
 #### Out of Memory Errors
@@ -422,8 +480,25 @@ java -Xmx4g -Xms2g \
 **Cause**: Insufficient disk space for temporary or final files
 **Solution**:
 - Monitor disk usage in upload directories
-- Implement disk space checks before accepting uploads
+- Configure disk space thresholds in application.properties
+- The service automatically checks disk space before operations
 - Clean up old temporary directories manually if needed
+
+**Automatic Disk Space Handling**:
+The service now includes comprehensive disk space error handling:
+- Pre-flight disk space checks before chunk saves and file assembly
+- Configurable minimum free space and safety buffer thresholds
+- Automatic detection of disk space related IOExceptions
+- Proper HTTP 507 (Insufficient Storage) responses for disk space errors
+- Detailed logging with disk space information when errors occur
+
+**Configuration**:
+```properties
+# Disk Space Configuration
+file-upload.disk-space.min-free-space-bytes=104857600    # 100MB minimum free space
+file-upload.disk-space.safety-buffer-bytes=52428800      # 50MB safety buffer
+file-upload.disk-space.enable-preflight-checks=true      # Enable pre-operation checks
+```
 
 #### Slow Upload Performance
 **Cause**: Various performance bottlenecks
@@ -448,6 +523,12 @@ curl http://localhost:8080/upload/{fileId}
 
 # Get all upload statuses
 curl http://localhost:8080/upload
+
+# Get resumable uploads only
+curl http://localhost:8080/upload/resumable
+
+# Resume/initialize upload with metadata
+curl -X POST "http://localhost:8080/upload/{fileId}/resume?totalChunks=10&fileName=test.pdf&fileSize=10240&chunkSize=1024"
 ```
 
 #### Monitor Temporary Directories
@@ -581,7 +662,8 @@ When all chunks are received and assembly is triggered:
 The service is designed to handle large files without loading them entirely into memory:
 
 - **Streaming Processing**: Chunks are processed as streams, not loaded into memory
-- **Bounded Memory**: Upload status tracking uses fixed-size data structures
+- **Concurrent Hashmap**: Upload status tracking uses thread-safe ConcurrentHashMap for in-memory state
+- **Bounded Memory**: Upload status tracking uses fixed-size data structures with atomic counters
 - **Automatic Cleanup**: Temporary files are cleaned up to prevent disk space leaks
 - **Reactive Streams**: Non-blocking I/O prevents thread pool exhaustion
 
@@ -592,4 +674,35 @@ The service is designed to handle large files without loading them entirely into
 - **Bounded Resources**: Configurable limits on concurrent uploads and thread pools
 - **Isolation**: Each upload uses separate temporary directories
 
-This architecture ensures the service can handle multiple large file uploads simultaneously while maintaining reasonable resource usage and providing reliable operation.
+### Resume Functionality
+
+The service provides robust resume capabilities that persist across browser refreshes:
+
+#### In-Memory Upload Tracking
+- **Concurrent HashMap**: Thread-safe `ConcurrentHashMap<String, FileUploadStatus>` stores all upload states
+- **Atomic Counters**: Byte counting uses `AtomicLong` for thread-safe progress tracking
+- **Metadata Storage**: File size, chunk size, and filename are stored with each upload
+- **Real-time Statistics**: Upload speed, progress percentage, and estimated completion time
+
+#### Resume Process
+1. **Browser Refresh Detection**: Client calls `/upload/{fileId}/resume` endpoint
+2. **State Recovery**: Server returns current upload state from in-memory hashmap
+3. **Missing Chunk Identification**: Response includes array of missing chunk numbers
+4. **Selective Upload**: Client uploads only missing chunks, not entire file
+5. **Progress Continuation**: Upload statistics continue from previous session
+
+#### Resume API Features
+- **Missing Chunks**: `missingChunks` array shows exactly which chunks need uploading
+- **Next Expected Chunk**: `nextExpectedChunk` for sequential upload optimization
+- **Progress Tracking**: Real-time `progressPercentage` and `uploadedBytes` counters
+- **Upload Speed**: Current upload speed in bytes per second
+- **Time Estimation**: `estimatedRemainingTime` based on current upload speed
+- **Resume Capability**: `canResume` flag indicates if upload can be continued
+
+#### Thread Safety
+- **Concurrent Operations**: All upload tracking operations are thread-safe
+- **Atomic Updates**: Chunk additions and byte counting use atomic operations
+- **Synchronized Collections**: Received chunks stored in synchronized Set
+- **Non-blocking**: Reactive programming prevents thread pool exhaustion
+
+This architecture ensures the service can handle multiple large file uploads simultaneously while maintaining reasonable resource usage, providing reliable operation, and supporting seamless resume functionality across browser sessions.

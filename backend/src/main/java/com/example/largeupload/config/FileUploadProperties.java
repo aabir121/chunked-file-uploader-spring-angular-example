@@ -19,6 +19,7 @@ public class FileUploadProperties {
     private Validation validation = new Validation();
     private Performance performance = new Performance();
     private Cors cors = new Cors();
+    private DiskSpace diskSpace = new DiskSpace();
 
 
 
@@ -65,5 +66,12 @@ public class FileUploadProperties {
         private List<String> allowedHeaders = List.of("*");
         private boolean allowCredentials = true;
         private long maxAge = 3600;
+    }
+
+    @Data
+    public static class DiskSpace {
+        private long minFreeSpaceBytes = 100L * 1024 * 1024; // 100MB minimum free space
+        private long safetyBufferBytes = 50L * 1024 * 1024; // 50MB safety buffer
+        private boolean enablePreflightChecks = true; // Enable disk space checks before operations
     }
 }

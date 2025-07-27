@@ -54,7 +54,7 @@ class FileStorageServiceTest {
         verify(uploadStatusService).getOrCreateUploadStatus(fileId, totalChunks);
         verify(uploadStatusService).setFileName(fileId, fileName);
         verify(chunkStorageService).saveChunk(fileId, chunkNumber, chunkData);
-        verify(uploadStatusService).addChunk(fileId, chunkNumber);
+        verify(uploadStatusService).addChunk(fileId, chunkNumber, chunkData.length);
     }
 
     @Test
@@ -88,7 +88,7 @@ class FileStorageServiceTest {
         FileUploadStatus mockStatus = new FileUploadStatus(fileId, totalChunks);
         when(uploadStatusService.getUploadStatus(fileId)).thenReturn(mockStatus);
         when(uploadStatusService.isUploadComplete(fileId)).thenReturn(false);
-        when(uploadStatusService.getMissingChunks(fileId)).thenReturn(new int[]{1, 2});
+        when(uploadStatusService.getMissingChunksArray(fileId)).thenReturn(new int[]{1, 2});
 
         IllegalStateException exception = assertThrows(IllegalStateException.class,
             () -> fileStorageService.completeUpload(fileId));

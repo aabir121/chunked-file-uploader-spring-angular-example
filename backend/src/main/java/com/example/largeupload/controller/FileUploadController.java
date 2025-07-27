@@ -1,6 +1,7 @@
 package com.example.largeupload.controller;
 
 import com.example.largeupload.model.FileUploadStatus;
+import com.example.largeupload.model.ResumeUploadResponse;
 import com.example.largeupload.service.FileStorageService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -22,8 +23,6 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import com.example.largeupload.exception.ValidationException;
-import com.example.largeupload.exception.FileStorageException;
-import org.springframework.http.HttpStatus;
 
 import java.util.Collection;
 
@@ -208,19 +207,7 @@ public class FileUploadController {
 
         return fileStorageService.completeUploadReactive(fileId)
                 .then(Mono.just(ResponseEntity.ok().<Void>build()))
-                .doOnSuccess(response -> logger.info("Upload completed successfully for fileId: {}", fileId))
-                .onErrorResume(IllegalStateException.class, e -> {
-                    logger.warn("Upload not ready for completion for fileId: {}: {}", fileId, e.getMessage());
-                    return Mono.just(ResponseEntity.badRequest().<Void>build());
-                })
-                .onErrorResume(FileStorageException.class, e -> {
-                    logger.error("File storage error during completion for fileId: {}: {}", fileId, e.getMessage(), e);
-                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).<Void>build());
-                })
-                .onErrorResume(Exception.class, e -> {
-                    logger.error("Unexpected error during completion for fileId: {}: {}", fileId, e.getMessage(), e);
-                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).<Void>build());
-                });
+                .doOnSuccess(response -> logger.info("Upload completed successfully for fileId: {}", fileId));
     }
 
     @Operation(summary = "Cancel upload",
@@ -238,11 +225,7 @@ public class FileUploadController {
         return Mono.fromRunnable(() -> fileStorageService.cleanupTempDirectory(fileId))
                 .subscribeOn(Schedulers.boundedElastic())
                 .then(Mono.just(ResponseEntity.ok().<Void>build()))
-                .doOnSuccess(response -> logger.info("Upload cancelled successfully for fileId: {}", fileId))
-                .onErrorResume(Exception.class, e -> {
-                    logger.error("Error cancelling upload for fileId: {}: {}", fileId, e.getMessage(), e);
-                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).<Void>build());
-                });
+                .doOnSuccess(response -> logger.info("Upload cancelled successfully for fileId: {}", fileId));
     }
 
     @Operation(summary = "Get all uploads",
@@ -255,6 +238,65 @@ public class FileUploadController {
     @GetMapping
     public Flux<FileUploadStatus> getAllUploads() {
         return fileStorageService.getAllUploadStatusesReactive();
+    }
+
+    @Operation(summary = "Resume upload",
+            description = "Initializes or resumes an upload session. Returns the current status and missing chunks for resume functionality.",
+            responses = {
+                    @ApiResponse(responseCode = "200", description = "Upload session initialized/resumed successfully",
+                            content = @Content(mediaType = "application/json",
+                                    schema = @Schema(implementation = ResumeUploadResponse.class))),
+                    @ApiResponse(responseCode = "400", description = "Invalid request parameters")
+            })
+    @PostMapping("/{fileId}/resume")
+    public Mono<ResponseEntity<ResumeUploadResponse>> resumeUpload(
+            @Parameter(description = "Unique identifier for the file") @PathVariable String fileId,
+            @Parameter(description = "Total number of chunks for the file") @RequestParam int totalChunks,
+            @Parameter(description = "Original filename") @RequestParam(required = false) String fileName,
+            @Parameter(description = "Total file size in bytes") @RequestParam(required = false) Long fileSize,
+            @Parameter(description = "Chunk size in bytes") @RequestParam(required = false) Integer chunkSize) {
+
+        logger.info("Resume upload request - fileId: {}, totalChunks: {}, fileName: {}, fileSize: {}, chunkSize: {}",
+                   fileId, totalChunks, fileName, fileSize, chunkSize);
+
+        // Validate parameters
+        if (fileId == null || fileId.trim().isEmpty()) {
+            return Mono.error(new ValidationException("fileId is required", "fileId", null));
+        }
+        if (totalChunks <= 0) {
+            return Mono.error(new ValidationException("totalChunks must be positive", "totalChunks", String.valueOf(totalChunks)));
+        }
+
+        return Mono.fromCallable(() -> {
+            // Get or create upload status with enhanced metadata
+            FileUploadStatus status;
+            if (fileName != null || fileSize != null || chunkSize != null) {
+                status = fileStorageService.getOrCreateUploadStatusWithMetadata(fileId, totalChunks, fileName, fileSize, chunkSize);
+            } else {
+                status = fileStorageService.getUploadStatus(fileId);
+                if (status == null) {
+                    status = fileStorageService.getOrCreateUploadStatus(fileId, totalChunks);
+                }
+            }
+
+            // Create response with resume information using constructor
+            ResumeUploadResponse response = new ResumeUploadResponse(status);
+            return ResponseEntity.ok(response);
+        })
+        .doOnSuccess(response -> logger.info("Resume upload response created for fileId: {}", fileId))
+        .doOnError(error -> logger.error("Failed to create resume upload response for fileId: {}", fileId, error));
+    }
+
+    @Operation(summary = "Get resumable uploads",
+            description = "Retrieves all uploads that can be resumed (not completed and not failed).",
+            responses = {
+                    @ApiResponse(responseCode = "200", description = "Resumable uploads retrieved successfully",
+                            content = @Content(mediaType = "application/json",
+                                    schema = @Schema(implementation = Collection.class)))
+            })
+    @GetMapping("/resumable")
+    public Flux<FileUploadStatus> getResumableUploads() {
+        return fileStorageService.getResumableUploadsReactive();
     }
 
     /**

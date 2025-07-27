@@ -2,6 +2,7 @@ package com.example.largeupload.service;
 
 import com.example.largeupload.config.FileUploadProperties;
 import com.example.largeupload.exception.FileStorageException;
+import com.example.largeupload.util.DiskSpaceUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -45,20 +46,37 @@ public class ChunkStorageService {
      * Saves a chunk to the temporary directory for the given file ID
      */
     public void saveChunk(String fileId, int chunkNumber, byte[] chunkData) throws IOException {
-        logger.debug("Saving chunk {} for fileId: {}, chunk size: {} bytes", 
+        logger.debug("Saving chunk {} for fileId: {}, chunk size: {} bytes",
                     chunkNumber, fileId, chunkData.length);
 
         Path tempUploadDir = getTempDirectory(fileId);
         createTempDirectoryIfNotExists(tempUploadDir, fileId);
 
+        // Check disk space before writing
+        try {
+            DiskSpaceUtil.validateDiskSpace(tempUploadDir, chunkData.length,
+                "chunk save for fileId: " + fileId + ", chunk: " + chunkNumber);
+        } catch (IOException diskSpaceEx) {
+            logger.error("Insufficient disk space for chunk {} of fileId: {}", chunkNumber, fileId, diskSpaceEx);
+            throw new FileStorageException("Insufficient disk space to save chunk", fileId, "SAVE_CHUNK", "INSUFFICIENT_DISK_SPACE", diskSpaceEx);
+        }
+
         Path chunkPath = tempUploadDir.resolve(fileId + ".part" + chunkNumber);
         try {
             Files.write(chunkPath, chunkData, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
-            logger.debug("Successfully saved chunk {} for fileId: {} at path: {}", 
+            logger.debug("Successfully saved chunk {} for fileId: {} at path: {}",
                         chunkNumber, fileId, chunkPath);
         } catch (IOException e) {
-            logger.error("Failed to save chunk {} for fileId: {} at path: {}", 
+            logger.error("Failed to save chunk {} for fileId: {} at path: {}",
                         chunkNumber, fileId, chunkPath, e);
+
+            // Check if this is a disk space related error
+            if (DiskSpaceUtil.isInsufficientSpaceException(e)) {
+                logger.error("Disk space error detected while saving chunk {} for fileId: {}", chunkNumber, fileId);
+                logger.info(DiskSpaceUtil.getDiskSpaceInfo(tempUploadDir));
+                throw new FileStorageException("Insufficient disk space to save chunk", fileId, "SAVE_CHUNK", "INSUFFICIENT_DISK_SPACE", e);
+            }
+
             throw new FileStorageException("Failed to save chunk", fileId, "SAVE_CHUNK", e);
         }
     }
@@ -173,10 +191,22 @@ public class ChunkStorageService {
     private void createTempDirectoryIfNotExists(Path tempUploadDir, String fileId) throws IOException {
         if (!Files.exists(tempUploadDir)) {
             try {
+                // Check disk space before creating directory
+                DiskSpaceUtil.validateDiskSpace(tempUploadDir.getParent(), 1024,
+                    "temporary directory creation for fileId: " + fileId);
+
                 Files.createDirectories(tempUploadDir);
                 logger.debug("Created temporary directory for fileId: {} at path: {}", fileId, tempUploadDir);
             } catch (IOException e) {
                 logger.error("Failed to create temporary directory for fileId: {} at path: {}", fileId, tempUploadDir, e);
+
+                // Check if this is a disk space related error
+                if (DiskSpaceUtil.isInsufficientSpaceException(e)) {
+                    logger.error("Disk space error detected while creating temp directory for fileId: {}", fileId);
+                    logger.info(DiskSpaceUtil.getDiskSpaceInfo(tempUploadDir.getParent()));
+                    throw new FileStorageException("Insufficient disk space to create temporary directory", fileId, "CREATE_TEMP_DIR", "INSUFFICIENT_DISK_SPACE", e);
+                }
+
                 throw new FileStorageException("Failed to create temporary directory", fileId, "CREATE_TEMP_DIR", e);
             }
         }

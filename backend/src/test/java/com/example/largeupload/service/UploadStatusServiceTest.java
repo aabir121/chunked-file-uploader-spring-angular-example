@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import reactor.test.StepVerifier;
 
 import java.util.Collection;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -182,14 +183,14 @@ class UploadStatusServiceTest {
         String fileId = "test-missing";
         int totalChunks = 5;
 
-        // Non-existent upload should return empty array
-        assertEquals(0, uploadStatusService.getMissingChunks(fileId).length);
+        // Non-existent upload should return empty set
+        assertEquals(0, uploadStatusService.getMissingChunks(fileId).size());
 
         uploadStatusService.getOrCreateUploadStatus(fileId, totalChunks);
-        
+
         // All chunks missing initially
-        int[] missing = uploadStatusService.getMissingChunks(fileId);
-        assertEquals(5, missing.length);
+        Set<Integer> missing = uploadStatusService.getMissingChunks(fileId);
+        assertEquals(5, missing.size());
 
         // Add some chunks
         uploadStatusService.addChunk(fileId, 0);
@@ -197,6 +198,31 @@ class UploadStatusServiceTest {
         uploadStatusService.addChunk(fileId, 4);
 
         missing = uploadStatusService.getMissingChunks(fileId);
+        assertEquals(2, missing.size());
+        assertTrue(missing.contains(1));
+        assertTrue(missing.contains(3));
+    }
+
+    @Test
+    void testGetMissingChunksArray() {
+        String fileId = "test-missing-array";
+        int totalChunks = 5;
+
+        // Non-existent upload should return empty array
+        assertEquals(0, uploadStatusService.getMissingChunksArray(fileId).length);
+
+        uploadStatusService.getOrCreateUploadStatus(fileId, totalChunks);
+
+        // All chunks missing initially
+        int[] missing = uploadStatusService.getMissingChunksArray(fileId);
+        assertEquals(5, missing.length);
+
+        // Add some chunks
+        uploadStatusService.addChunk(fileId, 0);
+        uploadStatusService.addChunk(fileId, 2);
+        uploadStatusService.addChunk(fileId, 4);
+
+        missing = uploadStatusService.getMissingChunksArray(fileId);
         assertEquals(2, missing.length);
         assertArrayEquals(new int[]{1, 3}, missing);
     }

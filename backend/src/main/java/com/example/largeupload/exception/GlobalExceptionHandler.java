@@ -1,6 +1,7 @@
 package com.example.largeupload.exception;
 
 import com.example.largeupload.dto.ErrorResponse;
+import com.example.largeupload.util.DiskSpaceUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -94,10 +95,10 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(FileStorageException.class)
     public Mono<ResponseEntity<ErrorResponse>> handleFileStorageException(
             FileStorageException ex, ServerWebExchange exchange) {
-        
+
         String traceId = generateTraceId();
         String path = exchange.getRequest().getPath().value();
-        
+
         Map<String, Object> details = new HashMap<>();
         if (ex.getFileId() != null) {
             details.put("fileId", ex.getFileId());
@@ -105,7 +106,24 @@ public class GlobalExceptionHandler {
         if (ex.getOperation() != null) {
             details.put("operation", ex.getOperation());
         }
-        
+
+        // Handle disk space errors with specific response
+        if ("INSUFFICIENT_DISK_SPACE".equals(ex.getErrorCode())) {
+            ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.INSUFFICIENT_STORAGE.value(),
+                "Insufficient Disk Space",
+                "There is not enough disk space available to complete this operation. " + ex.getMessage(),
+                path,
+                ex.getErrorCode(),
+                details
+            );
+            errorResponse.setTraceId(traceId);
+
+            logger.error("Disk space error [{}]: {} at path: {}", traceId, ex.getMessage(), path, ex);
+
+            return Mono.just(ResponseEntity.status(HttpStatus.INSUFFICIENT_STORAGE).body(errorResponse));
+        }
+
         ErrorResponse errorResponse = new ErrorResponse(
             HttpStatus.INTERNAL_SERVER_ERROR.value(),
             "File Storage Error",
@@ -125,10 +143,10 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(IllegalArgumentException.class)
     public Mono<ResponseEntity<ErrorResponse>> handleIllegalArgumentException(
             IllegalArgumentException ex, ServerWebExchange exchange) {
-        
+
         String traceId = generateTraceId();
         String path = exchange.getRequest().getPath().value();
-        
+
         ErrorResponse errorResponse = new ErrorResponse(
             HttpStatus.BAD_REQUEST.value(),
             "Invalid Argument",
@@ -137,19 +155,56 @@ public class GlobalExceptionHandler {
             "INVALID_ARGUMENT"
         );
         errorResponse.setTraceId(traceId);
-        
+
         logger.warn("Invalid argument error [{}]: {} at path: {}", traceId, ex.getMessage(), path, ex);
-        
+
+        return Mono.just(ResponseEntity.badRequest().body(errorResponse));
+    }
+
+    @ExceptionHandler(IllegalStateException.class)
+    public Mono<ResponseEntity<ErrorResponse>> handleIllegalStateException(
+            IllegalStateException ex, ServerWebExchange exchange) {
+
+        String traceId = generateTraceId();
+        String path = exchange.getRequest().getPath().value();
+
+        ErrorResponse errorResponse = new ErrorResponse(
+            HttpStatus.BAD_REQUEST.value(),
+            "Invalid State",
+            ex.getMessage(),
+            path,
+            "INVALID_STATE"
+        );
+        errorResponse.setTraceId(traceId);
+
+        logger.warn("Invalid state error [{}]: {} at path: {}", traceId, ex.getMessage(), path, ex);
+
         return Mono.just(ResponseEntity.badRequest().body(errorResponse));
     }
     
     @ExceptionHandler(IOException.class)
     public Mono<ResponseEntity<ErrorResponse>> handleIOException(
             IOException ex, ServerWebExchange exchange) {
-        
+
         String traceId = generateTraceId();
         String path = exchange.getRequest().getPath().value();
-        
+
+        // Check if this is a disk space related IOException
+        if (isDiskSpaceException(ex)) {
+            ErrorResponse errorResponse = new ErrorResponse(
+                HttpStatus.INSUFFICIENT_STORAGE.value(),
+                "Insufficient Disk Space",
+                "There is not enough disk space available to complete this operation: " + ex.getMessage(),
+                path,
+                "INSUFFICIENT_DISK_SPACE"
+            );
+            errorResponse.setTraceId(traceId);
+
+            logger.error("Disk space I/O error [{}]: {} at path: {}", traceId, ex.getMessage(), path, ex);
+
+            return Mono.just(ResponseEntity.status(HttpStatus.INSUFFICIENT_STORAGE).body(errorResponse));
+        }
+
         ErrorResponse errorResponse = new ErrorResponse(
             HttpStatus.INTERNAL_SERVER_ERROR.value(),
             "I/O Error",
@@ -158,9 +213,9 @@ public class GlobalExceptionHandler {
             "IO_ERROR"
         );
         errorResponse.setTraceId(traceId);
-        
+
         logger.error("I/O error [{}]: {} at path: {}", traceId, ex.getMessage(), path, ex);
-        
+
         return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorResponse));
     }
     
@@ -262,5 +317,12 @@ public class GlobalExceptionHandler {
         String traceId = UUID.randomUUID().toString().substring(0, 8);
         MDC.put("traceId", traceId);
         return traceId;
+    }
+
+    /**
+     * Helper method to check if an IOException is related to disk space issues
+     */
+    private boolean isDiskSpaceException(IOException ex) {
+        return DiskSpaceUtil.isInsufficientSpaceException(ex);
     }
 }

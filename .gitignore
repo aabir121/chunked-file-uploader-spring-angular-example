@@ -41,6 +41,7 @@ logs/
 
 # Project specific
 uploads/
+test-uploads/
 temp/
 
 # Backup files
