@@ -36,11 +36,16 @@ public class FileStorageService {
         }
     }
 
-    public void saveChunk(String fileId, int chunkNumber, int totalChunks, byte[] chunk) throws IOException {
-        logger.debug("Saving chunk {} of {} for fileId: {}, chunk size: {} bytes",
-                    chunkNumber, totalChunks, fileId, chunk.length);
+    public void saveChunk(String fileId, int chunkNumber, int totalChunks, byte[] chunk, String fileName) throws IOException {
+        logger.debug("Saving chunk {} of {} for fileId: {}, chunk size: {} bytes, fileName: {}",
+                    chunkNumber, totalChunks, fileId, chunk.length, fileName);
 
         FileUploadStatus status = fileUploadStatusMap.computeIfAbsent(fileId, k -> new FileUploadStatus(fileId, totalChunks));
+
+        // Store the filename if not already set
+        if (status.getFileName() == null && fileName != null) {
+            status.setFileName(fileName);
+        }
 
         Path chunkPath = uploadDir.resolve(fileId + ".part" + chunkNumber);
         try {
@@ -55,16 +60,42 @@ public class FileStorageService {
 
         status.addChunk(chunkNumber);
 
-        if (status.isComplete()) {
-            logger.info("All chunks received for fileId: {}, starting file combination", fileId);
-            combineChunks(fileId, totalChunks);
+        // Note: File combination is now done manually via the complete API
+        // This allows for better error handling and explicit completion control
+        logger.debug("Chunk {} saved for fileId: {}. Total chunks received: {}/{}",
+                    chunkNumber, fileId, status.getReceivedChunks().size(), totalChunks);
+    }
+
+    // Overloaded method for backward compatibility
+    public void saveChunk(String fileId, int chunkNumber, int totalChunks, byte[] chunk) throws IOException {
+        saveChunk(fileId, chunkNumber, totalChunks, chunk, null);
+    }
+
+    /**
+     * Manually complete the upload by combining all chunks into the final file.
+     * This method should be called after all chunks have been uploaded.
+     */
+    public void completeUpload(String fileId) throws IOException {
+        FileUploadStatus status = fileUploadStatusMap.get(fileId);
+        if (status == null) {
+            throw new IllegalStateException("Upload not found for fileId: " + fileId);
         }
+
+        if (!status.isComplete()) {
+            throw new IllegalStateException("Upload is not complete. Missing chunks: " +
+                (status.getTotalChunks() - status.getReceivedChunks().size()) + "/" + status.getTotalChunks());
+        }
+
+        combineChunks(fileId, status.getTotalChunks());
     }
 
     private void combineChunks(String fileId, int totalChunks) throws IOException {
-        Path finalFilePath = uploadDir.resolve(fileId);
-        logger.info("Combining {} chunks for fileId: {} into final file: {}",
-                   totalChunks, fileId, finalFilePath);
+        FileUploadStatus status = fileUploadStatusMap.get(fileId);
+        String fileName = (status != null && status.getFileName() != null) ? status.getFileName() : fileId;
+
+        Path finalFilePath = uploadDir.resolve(fileName);
+        logger.info("Combining {} chunks for fileId: {} into final file: {} (original name: {})",
+                   totalChunks, fileId, finalFilePath, fileName);
 
         try {
             for (int i = 0; i < totalChunks; i++) {
@@ -162,6 +193,48 @@ public class FileStorageService {
                 logger.error("Enhanced reactive save chunk failed for fileId: {}, chunk: {}", fileId, chunkNumber, e);
                 throw new FileStorageException("Failed to save chunk for fileId: " + fileId + ", chunk: " + chunkNumber,
                                              fileId, "SAVE_CHUNK_ENHANCED", "ENHANCED_SAVE_FAILED", e);
+            }
+        })
+        .subscribeOn(Schedulers.boundedElastic())
+        .then();
+    }
+
+    /**
+     * Enhanced reactive method with filename support
+     */
+    public Mono<Void> saveChunkReactiveEnhanced(String fileId, int chunkNumber, int totalChunks, byte[] chunk, String fileName) {
+        return Mono.fromCallable(() -> {
+            // Validation
+            if (fileId == null || fileId.trim().isEmpty()) {
+                logger.warn("Validation failed: FileId is null or empty");
+                throw new ValidationException("FileId cannot be null or empty", "fileId", fileId);
+            }
+
+            try {
+                saveChunk(fileId, chunkNumber, totalChunks, chunk, fileName);
+                return null;
+            } catch (IOException e) {
+                logger.error("Enhanced reactive save chunk with filename failed for fileId: {}, chunk: {}", fileId, chunkNumber, e);
+                throw new FileStorageException("Failed to save chunk for fileId: " + fileId + ", chunk: " + chunkNumber,
+                                             fileId, "SAVE_CHUNK_ENHANCED_WITH_FILENAME", "ENHANCED_SAVE_WITH_FILENAME_FAILED", e);
+            }
+        })
+        .subscribeOn(Schedulers.boundedElastic())
+        .then();
+    }
+
+    /**
+     * Reactive version of completeUpload that returns a Mono<Void>
+     */
+    public Mono<Void> completeUploadReactive(String fileId) {
+        return Mono.fromCallable(() -> {
+            try {
+                completeUpload(fileId);
+                return null;
+            } catch (IOException e) {
+                logger.error("Reactive complete upload failed for fileId: {}", fileId, e);
+                throw new FileStorageException("Failed to complete upload for fileId: " + fileId,
+                                             fileId, "COMPLETE_UPLOAD_REACTIVE", "REACTIVE_COMPLETE_FAILED", e);
             }
         })
         .subscribeOn(Schedulers.boundedElastic())

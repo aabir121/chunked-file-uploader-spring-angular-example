@@ -21,6 +21,8 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import com.example.largeupload.exception.ValidationException;
+import com.example.largeupload.exception.FileStorageException;
+import org.springframework.http.HttpStatus;
 
 import java.util.Collection;
 
@@ -55,10 +57,11 @@ public class FileUploadController {
             @Parameter(description = "The file chunk") @RequestPart("file") FilePart file,
             @Parameter(description = "Unique identifier for the file") @RequestPart("fileId") String fileId,
             @Parameter(description = "The chunk number (0-based)") @RequestPart("chunkNumber") String chunkNumber,
-            @Parameter(description = "Total number of chunks for the file") @RequestPart("totalChunks") String totalChunks) {
+            @Parameter(description = "Total number of chunks for the file") @RequestPart("totalChunks") String totalChunks,
+            @Parameter(description = "Original filename") @RequestPart("fileName") String fileName) {
 
-        logger.info("Received upload request - fileId: {}, chunkNumber: {}, totalChunks: {}, file: {}",
-                   fileId, chunkNumber, totalChunks,
+        logger.info("Received upload request - fileId: {}, chunkNumber: {}, totalChunks: {}, fileName: {}, chunkFile: {}",
+                   fileId, chunkNumber, totalChunks, fileName,
                    (file != null ? file.filename() : "null"));
 
         // Validation - let the service handle detailed validation
@@ -88,7 +91,8 @@ public class FileUploadController {
                     try {
                         int chunkNum = Integer.parseInt(chunkNumber);
                         int totalChunksNum = Integer.parseInt(totalChunks);
-                        return fileStorageService.saveChunkReactiveEnhanced(fileId, chunkNum, totalChunksNum, fileBytes);
+                        // Use the original filename parameter, not the chunk filename
+                        return fileStorageService.saveChunkReactiveEnhanced(fileId, chunkNum, totalChunksNum, fileBytes, fileName);
                     } catch (NumberFormatException e) {
                         logger.warn("Invalid number format for fileId: {}, chunkNumber: {}, totalChunks: {}",
                                   fileId, chunkNumber, totalChunks, e);
@@ -212,7 +216,7 @@ public class FileUploadController {
                     try {
                         int chunkNum = Integer.parseInt(chunkNumber);
                         int totalChunksNum = Integer.parseInt(totalChunks);
-                        return fileStorageService.saveChunkReactiveEnhanced(fileId, chunkNum, totalChunksNum, fileBytes);
+                        return fileStorageService.saveChunkReactiveEnhanced(fileId, chunkNum, totalChunksNum, fileBytes, fileName);
                     } catch (NumberFormatException e) {
                         logger.warn("Invalid number format in binary upload for fileId: {}, chunkNumber: {}, totalChunks: {}",
                                    fileId, chunkNumber, totalChunks, e);
@@ -222,6 +226,37 @@ public class FileUploadController {
                 })
                 .then(Mono.just(ResponseEntity.ok().<Void>build()))
                 .doOnSuccess(response -> logger.info("Binary chunk saved successfully for fileId: {}, chunk: {}", fileId, chunkNumber));
+    }
+
+    @Operation(summary = "Complete file upload",
+            description = "Manually triggers file combination after all chunks have been uploaded. This should be called after all chunks are successfully uploaded.",
+            responses = {
+                    @ApiResponse(responseCode = "200", description = "File successfully combined and upload completed"),
+                    @ApiResponse(responseCode = "400", description = "Upload is not ready for completion (missing chunks)"),
+                    @ApiResponse(responseCode = "404", description = "File upload not found"),
+                    @ApiResponse(responseCode = "500", description = "Error during file combination")
+            })
+    @PostMapping("/{fileId}/complete")
+    public Mono<ResponseEntity<Void>> completeUpload(
+            @Parameter(description = "Unique identifier for the file") @PathVariable String fileId) {
+
+        logger.info("Received complete upload request for fileId: {}", fileId);
+
+        return fileStorageService.completeUploadReactive(fileId)
+                .then(Mono.just(ResponseEntity.ok().<Void>build()))
+                .doOnSuccess(response -> logger.info("Upload completed successfully for fileId: {}", fileId))
+                .onErrorResume(IllegalStateException.class, e -> {
+                    logger.warn("Upload not ready for completion for fileId: {}: {}", fileId, e.getMessage());
+                    return Mono.just(ResponseEntity.badRequest().<Void>build());
+                })
+                .onErrorResume(FileStorageException.class, e -> {
+                    logger.error("File storage error during completion for fileId: {}: {}", fileId, e.getMessage(), e);
+                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).<Void>build());
+                })
+                .onErrorResume(Exception.class, e -> {
+                    logger.error("Unexpected error during completion for fileId: {}: {}", fileId, e.getMessage(), e);
+                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).<Void>build());
+                });
     }
 
     @Operation(summary = "Get all uploads",

@@ -9,6 +9,7 @@ public class FileUploadStatus {
     private final String fileId;
     private final int totalChunks;
     private final Set<Integer> receivedChunks;
+    private String fileName; // Store original filename
 
     public FileUploadStatus(String fileId, int totalChunks) {
         this.fileId = fileId;
@@ -34,5 +35,13 @@ public class FileUploadStatus {
 
     public boolean isComplete() {
         return receivedChunks.size() == totalChunks;
+    }
+
+    public String getFileName() {
+        return fileName;
+    }
+
+    public void setFileName(String fileName) {
+        this.fileName = fileName;
     }
 }
