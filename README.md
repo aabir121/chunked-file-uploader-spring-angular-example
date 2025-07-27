@@ -21,7 +21,7 @@ The frontend is a standalone Angular application that serves as the user interfa
 -   **Performance:** To ensure the UI remains responsive, the computationally intensive tasks of file slicing are offloaded to a **Web Worker**. This prevents the main browser thread from becoming blocked, even when processing very large files.
 -   **Communication:** It communicates with the backend via a RESTful API to send the file chunks and manage the upload lifecycle.
 
-For more details on the frontend implementation, please see the [frontend/README.md](frontend/README.md).
+For more details on the frontend implementation, please see the [frontend README](frontend/README.md).
 
 ### Backend (Spring Boot)
 
@@ -31,7 +31,7 @@ The backend is a Spring Boot application that exposes a REST API to handle the f
 -   **Reassembly:** It temporarily stores these chunks and, once all chunks for a specific file have been received, it reassembles them into the complete, original file.
 -   **State Management:** It maintains the state of each upload, tracking which chunks have been successfully received.
 
-For more details on the backend implementation, please see the [backend/README.md](backend/README.md).
+For more details on the backend implementation, please see the [backend README](backend/README.md).
 
 ## Future Enhancements
 
@@ -48,4 +48,4 @@ This project is open-source and community-driven. We welcome contributions, idea
 
 ## License
 
-This project is licensed under the MIT License. See the accompanying `LICENSE` file for details.
+This project is licensed under the MIT License. See the accompanying [LICENSE](LICENSE) file for details.
