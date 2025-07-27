@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced Upload UI - Demo</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f7fa;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+        }
+        
+        .section {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
+        
+        .section h2 {
+            margin-top: 0;
+            color: #1a1a1a;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 8px;
+        }
+        
+        /* Card-based design */
+        .backend-cards-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+            gap: 20px;
+            padding: 10px 0;
+        }
+        
+        .backend-card {
+            background: white;
+            border-radius: 12px;
+            border: 1px solid #e1e5e9;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            transition: all 0.2s ease;
+            overflow: hidden;
+        }
+        
+        .backend-card:hover {
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+            transform: translateY(-2px);
+        }
+        
+        .backend-card.completed {
+            border-left: 4px solid #28a745;
+        }
+        
+        .backend-card.in-progress {
+            border-left: 4px solid #007bff;
+        }
+        
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            padding: 16px 20px 12px;
+            border-bottom: 1px solid #f1f3f4;
+        }
+        
+        .file-info {
+            flex: 1;
+            min-width: 0;
+        }
+        
+        .file-name {
+            margin: 0 0 4px 0;
+            font-size: 16px;
+            font-weight: 600;
+            color: #1a1a1a;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .file-id {
+            font-size: 12px;
+            color: #666;
+            font-family: monospace;
+        }
+        
+        .status-badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .status-badge.completed {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status-badge.in-progress {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+        
+        .card-body {
+            padding: 16px 20px 20px;
+        }
+        
+        .card-progress-section {
+            margin-bottom: 16px;
+        }
+        
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        
+        .progress-label {
+            font-size: 13px;
+            font-weight: 500;
+            color: #555;
+        }
+        
+        .progress-percentage {
+            font-size: 14px;
+            font-weight: 600;
+            color: #007bff;
+        }
+        
+        .progress-bar {
+            height: 8px;
+            background: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 8px;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #007bff, #28a745);
+            transition: width 0.3s ease;
+        }
+        
+        .progress-details {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .chunks-info {
+            font-family: monospace;
+        }
+        
+        .bytes-info {
+            color: #28a745;
+            font-weight: 500;
+        }
+        
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        
+        .metric {
+            text-align: center;
+            padding: 8px;
+            background: #f8f9fa;
+            border-radius: 6px;
+        }
+        
+        .metric-label {
+            display: block;
+            font-size: 11px;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+        
+        .metric-value {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .metric-value.resume-yes {
+            color: #28a745;
+        }
+        
+        .timestamps {
+            display: flex;
+            justify-content: space-between;
+            border-top: 1px solid #f1f3f4;
+            padding-top: 12px;
+        }
+        
+        .timestamp {
+            font-size: 11px;
+            color: #888;
+        }
+        
+        /* Empty state */
+        .backend-empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666;
+        }
+        
+        .empty-illustration {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 24px;
+            position: relative;
+        }
+        
+        .server-icon, .upload-icon {
+            font-size: 32px;
+            opacity: 0.6;
+        }
+        
+        .connection-line {
+            width: 40px;
+            height: 2px;
+            background: linear-gradient(90deg, #ddd, #bbb, #ddd);
+            margin: 0 16px;
+            position: relative;
+        }
+        
+        .connection-line::after {
+            content: '';
+            position: absolute;
+            right: -4px;
+            top: -2px;
+            width: 0;
+            height: 0;
+            border-left: 6px solid #bbb;
+            border-top: 3px solid transparent;
+            border-bottom: 3px solid transparent;
+        }
+        
+        .empty-state h3 {
+            margin: 0 0 8px 0;
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .empty-state p {
+            margin: 0 0 24px 0;
+            font-size: 14px;
+            color: #666;
+        }
+        
+        .refresh-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 20px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+        
+        .refresh-btn:hover {
+            background: #0056b3;
+        }
+        
+        .comparison {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-top: 30px;
+        }
+        
+        .old-design {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 8px;
+            padding: 20px;
+        }
+        
+        .new-design {
+            background: #d1ecf1;
+            border: 1px solid #bee5eb;
+            border-radius: 8px;
+            padding: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎨 Enhanced Upload UI Design</h1>
+        
+        <div class="section">
+            <h2>✨ New Card-Based Design</h2>
+            <p>The new design addresses all the UX issues with a modern, informative card layout:</p>
+            
+            <div class="backend-cards-container">
+                <!-- Sample completed upload -->
+                <div class="backend-card completed">
+                    <div class="card-header">
+                        <div class="file-info">
+                            <h4 class="file-name">CineDoze.Com-Jinn 3 (2025) ML...</h4>
+                            <span class="file-id">ID: 61c705de...</span>
+                        </div>
+                        <div class="status-badge completed">Completed</div>
+                    </div>
+                    <div class="card-body">
+                        <div class="card-progress-section">
+                            <div class="progress-header">
+                                <span class="progress-label">Upload Progress</span>
+                                <span class="progress-percentage">100.0%</span>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="width: 100%"></div>
+                            </div>
+                            <div class="progress-details">
+                                <span class="chunks-info">1024/1024 chunks</span>
+                                <span class="bytes-info">2.1 GB uploaded</span>
+                            </div>
+                        </div>
+                        <div class="metrics-grid">
+                            <div class="metric">
+                                <span class="metric-label">Speed</span>
+                                <span class="metric-value">15.2 MB/s</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-label">Resumable</span>
+                                <span class="metric-value resume-yes">✓ Yes</span>
+                            </div>
+                        </div>
+                        <div class="timestamps">
+                            <small class="timestamp">Started: 2h ago</small>
+                            <small class="timestamp">Updated: Just now</small>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Sample in-progress upload -->
+                <div class="backend-card in-progress">
+                    <div class="card-header">
+                        <div class="file-info">
+                            <h4 class="file-name">Large_Dataset_2025.zip</h4>
+                            <span class="file-id">ID: 8a9b2c3d...</span>
+                        </div>
+                        <div class="status-badge in-progress">Processing</div>
+                    </div>
+                    <div class="card-body">
+                        <div class="card-progress-section">
+                            <div class="progress-header">
+                                <span class="progress-label">Upload Progress</span>
+                                <span class="progress-percentage">67.3%</span>
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="width: 67.3%"></div>
+                            </div>
+                            <div class="progress-details">
+                                <span class="chunks-info">689/1024 chunks</span>
+                                <span class="bytes-info">1.4 GB uploaded</span>
+                            </div>
+                        </div>
+                        <div class="metrics-grid">
+                            <div class="metric">
+                                <span class="metric-label">Speed</span>
+                                <span class="metric-value">8.7 MB/s</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-label">Resumable</span>
+                                <span class="metric-value resume-yes">✓ Yes</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-label">Missing</span>
+                                <span class="metric-value">335 chunks</span>
+                            </div>
+                        </div>
+                        <div class="timestamps">
+                            <small class="timestamp">Started: 45m ago</small>
+                            <small class="timestamp">Updated: 2s ago</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>🎯 Empty State Design</h2>
+            <p>When no uploads are active, users see a clear, actionable empty state:</p>
+            
+            <div class="backend-empty-state empty-state">
+                <div class="empty-illustration">
+                    <div class="server-icon">🖥️</div>
+                    <div class="connection-line"></div>
+                    <div class="upload-icon">📤</div>
+                </div>
+                <h3>No Active Server Processing</h3>
+                <p>Your uploads will appear here once the server starts processing them.</p>
+                <div class="empty-actions">
+                    <button class="refresh-btn">
+                        <span class="refresh-icon">🔄</span>
+                        Refresh Status
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>🔄 Key UX Improvements</h2>
+            <ul style="line-height: 1.8; font-size: 16px;">
+                <li><strong>No more empty rows</strong> - Only show actual upload data</li>
+                <li><strong>Clear visual hierarchy</strong> - Cards with color-coded status borders</li>
+                <li><strong>Contextual information</strong> - Every piece of data has clear labels</li>
+                <li><strong>Progressive disclosure</strong> - Show relevant metrics only when available</li>
+                <li><strong>Actionable empty states</strong> - Clear next steps for users</li>
+                <li><strong>Responsive design</strong> - Cards adapt to different screen sizes</li>
+                <li><strong>Hover interactions</strong> - Visual feedback for better engagement</li>
+                <li><strong>Semantic colors</strong> - Green for completed, blue for in-progress</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,165 @@
+<h2>Current Uploads</h2>
+
+<div *ngIf="(uploads$ | async) as uploads">
+  <div class="uploads-container" *ngIf="uploads.length > 0">
+    <div class="upload-item" *ngFor="let upload of uploads; trackBy: trackByUploadId">
+      <div class="upload-content">
+        <div class="file-section">
+          <app-file-info
+            [fileName]="upload.name"
+            [fileSize]="upload.size"
+            [fileType]="upload.file.type"
+            [lastModified]="upload.file.lastModified"
+            [compact]="false"
+            [showModified]="true">
+          </app-file-info>
+        </div>
+
+        <div class="progress-section">
+          <app-progress-bar
+            [progress]="upload.progress"
+            [showText]="true"
+            [showEta]="true"
+            [showDetails]="true"
+            [eta]="getETA(upload)"
+            [uploadedBytes]="getUploadedBytes(upload)"
+            [totalBytes]="upload.size"
+            [error]="upload.status === 'failed'"
+            [paused]="upload.status === 'paused'">
+          </app-progress-bar>
+          <div class="upload-stats">
+            <span class="status" [class]="'status-' + upload.status">
+              {{ getStatusText(upload.status) }}
+            </span>
+            <span class="chunks" *ngIf="upload.totalChunks > 1">
+              {{ upload.uploadedChunks.size }}/{{ upload.totalChunks }} chunks
+            </span>
+            <span class="missing-chunks" *ngIf="upload.missingChunks && upload.missingChunks.size > 0">
+              ({{ upload.missingChunks.size }} missing)
+            </span>
+            <span class="speed" *ngIf="getUploadSpeed(upload)">
+              {{ getUploadSpeed(upload) }}
+            </span>
+            <span class="uploaded-bytes" *ngIf="upload.uploadedBytes">
+              {{ formatBytes(upload.uploadedBytes) }} uploaded
+            </span>
+            <span class="eta" *ngIf="upload.estimatedRemainingTime">
+              ETA: {{ formatTime(upload.estimatedRemainingTime) }}
+            </span>
+          </div>
+        </div>
+
+        <div class="actions-section">
+          <app-upload-actions
+            [upload]="upload"
+            [disabled]="false"
+            (pause)="pauseUpload($event)"
+            (resume)="resumeUpload($event)"
+            (cancel)="cancelUpload($event)"
+            (retry)="retryUpload($event)"
+            (remove)="removeUpload($event)">
+          </app-upload-actions>
+        </div>
+      </div>
+
+      <div class="error-message" *ngIf="upload.error">
+        <span class="error-icon">⚠️</span>
+        {{ upload.error }}
+      </div>
+    </div>
+  </div>
+
+  <div class="empty-state" *ngIf="uploads.length === 0">
+    <div class="empty-icon">📁</div>
+    <p>No uploads in progress.</p>
+    <small>Select files to start uploading</small>
+  </div>
+</div>
+
+<div class="backend-section">
+  <div class="section-header">
+    <h2>Server Status Monitor</h2>
+    <p class="section-description">
+      Real-time view of upload processing on the server side. This shows how the backend is handling your file chunks.
+    </p>
+  </div>
+
+  <div *ngIf="(backendUploads$ | async) as backendUploads" class="backend-content">
+    <div *ngIf="backendUploads.length > 0" class="backend-cards-container">
+      <div class="backend-card" *ngFor="let upload of backendUploads"
+           [class.completed]="upload.complete"
+           [class.failed]="upload.failed"
+           [class.in-progress]="!upload.complete && !upload.failed">
+
+        <div class="card-header">
+          <div class="file-info">
+            <h4 class="file-name">{{ upload.fileName || 'Processing...' }}</h4>
+            <span class="file-id">ID: {{ upload.fileId.substring(0, 8) }}...</span>
+          </div>
+          <div class="status-badge"
+               [class.completed]="upload.complete"
+               [class.failed]="upload.failed"
+               [class.in-progress]="!upload.complete && !upload.failed">
+            {{ getBackendStatusText(upload) }}
+          </div>
+        </div>
+
+        <div class="card-body">
+          <div class="card-progress-section">
+            <div class="progress-header">
+              <span class="progress-label">Upload Progress</span>
+              <span class="progress-percentage">{{ upload.progressPercentage.toFixed(1) }}%</span>
+            </div>
+            <div class="progress-bar">
+              <div class="progress-fill" [style.width.%]="upload.progressPercentage"></div>
+            </div>
+            <div class="progress-details">
+              <span class="chunks-info">{{ upload.receivedChunks.length }}/{{ upload.totalChunks }} chunks</span>
+              <span class="bytes-info" *ngIf="upload.uploadedBytes">{{ formatBytes(upload.uploadedBytes) }} uploaded</span>
+            </div>
+          </div>
+
+          <div class="metrics-grid" *ngIf="upload.uploadSpeed || upload.canResume || upload.missingChunks.length > 0">
+            <div class="metric" *ngIf="upload.uploadSpeed">
+              <span class="metric-label">Speed</span>
+              <span class="metric-value">{{ formatBytes(upload.uploadSpeed) }}/s</span>
+            </div>
+            <div class="metric" *ngIf="upload.canResume">
+              <span class="metric-label">Resumable</span>
+              <span class="metric-value resume-yes">✓ Yes</span>
+            </div>
+            <div class="metric" *ngIf="upload.missingChunks.length > 0">
+              <span class="metric-label">Missing</span>
+              <span class="metric-value missing-chunks">{{ upload.missingChunks.length }} chunks</span>
+            </div>
+          </div>
+
+          <div class="timestamps" *ngIf="upload.createdAt || upload.lastUpdated">
+            <small class="timestamp" *ngIf="upload.createdAt">
+              Started: {{ formatTimestamp(upload.createdAt) }}
+            </small>
+            <small class="timestamp" *ngIf="upload.lastUpdated">
+              Updated: {{ formatTimestamp(upload.lastUpdated) }}
+            </small>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div *ngIf="backendUploads.length === 0" class="backend-empty-state">
+      <div class="empty-illustration">
+        <div class="server-icon">🖥️</div>
+        <div class="connection-line"></div>
+        <div class="upload-icon">📤</div>
+      </div>
+      <h3>No Active Server Processing</h3>
+      <p>Your uploads will appear here once the server starts processing them.</p>
+      <div class="empty-actions">
+        <button class="refresh-btn" (click)="refreshBackendData()">
+          <span class="refresh-icon">🔄</span>
+          Refresh Status
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
