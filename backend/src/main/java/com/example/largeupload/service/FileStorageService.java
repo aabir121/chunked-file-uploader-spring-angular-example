@@ -1,137 +1,118 @@
 package com.example.largeupload.service;
 
-import com.example.largeupload.exception.FileStorageException;
-import com.example.largeupload.exception.ValidationException;
 import com.example.largeupload.model.FileUploadStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardOpenOption;
 import java.util.Collection;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * Main service for file upload operations, orchestrating chunk storage, file assembly, and status tracking
+ */
 @Service
 public class FileStorageService {
 
     private static final Logger logger = LoggerFactory.getLogger(FileStorageService.class);
-    private final Path uploadDir = Paths.get("uploads");
-    private final Map<String, FileUploadStatus> fileUploadStatusMap = new ConcurrentHashMap<>();
 
-    public FileStorageService() {
-        try {
-            Files.createDirectories(uploadDir);
-            logger.info("Upload directory created/verified at: {}", uploadDir.toAbsolutePath());
-        } catch (IOException e) {
-            logger.error("Failed to create upload directory at: {}", uploadDir.toAbsolutePath(), e);
-            throw new FileStorageException("Could not create upload directory", null, "INIT", "DIRECTORY_CREATION_FAILED", e);
-        }
+    private final ChunkStorageService chunkStorageService;
+    private final FileAssemblyService fileAssemblyService;
+    private final UploadStatusService uploadStatusService;
+
+    public FileStorageService(ChunkStorageService chunkStorageService,
+                             FileAssemblyService fileAssemblyService,
+                             UploadStatusService uploadStatusService) {
+        this.chunkStorageService = chunkStorageService;
+        this.fileAssemblyService = fileAssemblyService;
+        this.uploadStatusService = uploadStatusService;
     }
 
+    /**
+     * Saves a chunk with validation
+     */
     public void saveChunk(String fileId, int chunkNumber, int totalChunks, byte[] chunk, String fileName) throws IOException {
         logger.debug("Saving chunk {} of {} for fileId: {}, chunk size: {} bytes, fileName: {}",
                     chunkNumber, totalChunks, fileId, chunk.length, fileName);
 
-        FileUploadStatus status = fileUploadStatusMap.computeIfAbsent(fileId, k -> new FileUploadStatus(fileId, totalChunks));
-
-        // Store the filename if not already set
-        if (status.getFileName() == null && fileName != null) {
-            status.setFileName(fileName);
+        // Basic validation
+        if (fileId == null || fileId.trim().isEmpty()) {
+            throw new IllegalArgumentException("fileId cannot be null or empty");
+        }
+        if (chunkNumber < 0) {
+            throw new IllegalArgumentException("chunkNumber cannot be negative");
+        }
+        if (totalChunks <= 0) {
+            throw new IllegalArgumentException("totalChunks must be positive");
+        }
+        if (chunk == null || chunk.length == 0) {
+            throw new IllegalArgumentException("chunk cannot be null or empty");
         }
 
-        Path chunkPath = uploadDir.resolve(fileId + ".part" + chunkNumber);
-        try {
-            Files.write(chunkPath, chunk, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
-            logger.debug("Successfully saved chunk {} for fileId: {} at path: {}",
-                        chunkNumber, fileId, chunkPath);
-        } catch (IOException e) {
-            logger.error("Failed to save chunk {} for fileId: {} at path: {}",
-                        chunkNumber, fileId, chunkPath, e);
-            throw new FileStorageException("Failed to save chunk", fileId, "SAVE_CHUNK", "CHUNK_WRITE_FAILED", e);
+        // Get or create upload status
+        uploadStatusService.getOrCreateUploadStatus(fileId, totalChunks);
+
+        // Set filename if provided and not already set
+        if (fileName != null && !fileName.trim().isEmpty()) {
+            uploadStatusService.setFileName(fileId, fileName);
         }
 
-        status.addChunk(chunkNumber);
+        // Save the chunk
+        chunkStorageService.saveChunk(fileId, chunkNumber, chunk);
 
-        // Note: File combination is now done manually via the complete API
-        // This allows for better error handling and explicit completion control
-        logger.debug("Chunk {} saved for fileId: {}. Total chunks received: {}/{}",
-                    chunkNumber, fileId, status.getReceivedChunks().size(), totalChunks);
+        // Update status
+        uploadStatusService.addChunk(fileId, chunkNumber);
+
+        logger.debug("Chunk {} saved for fileId: {}. Progress: {}/{}",
+                    chunkNumber, fileId, uploadStatusService.getReceivedChunkCount(fileId), totalChunks);
     }
 
-    // Overloaded method for backward compatibility
+    /**
+     * Overloaded method for backward compatibility
+     */
     public void saveChunk(String fileId, int chunkNumber, int totalChunks, byte[] chunk) throws IOException {
         saveChunk(fileId, chunkNumber, totalChunks, chunk, null);
     }
 
     /**
-     * Manually complete the upload by combining all chunks into the final file.
-     * This method should be called after all chunks have been uploaded.
+     * Completes the upload by assembling all chunks into the final file
      */
     public void completeUpload(String fileId) throws IOException {
-        FileUploadStatus status = fileUploadStatusMap.get(fileId);
+        logger.info("Completing upload for fileId: {}", fileId);
+
+        FileUploadStatus status = uploadStatusService.getUploadStatus(fileId);
         if (status == null) {
-            throw new IllegalStateException("Upload not found for fileId: " + fileId);
+            throw new IllegalArgumentException("No upload found for fileId: " + fileId);
         }
 
-        if (!status.isComplete()) {
-            throw new IllegalStateException("Upload is not complete. Missing chunks: " +
-                (status.getTotalChunks() - status.getReceivedChunks().size()) + "/" + status.getTotalChunks());
+        if (!uploadStatusService.isUploadComplete(fileId)) {
+            int[] missingChunks = uploadStatusService.getMissingChunks(fileId);
+            throw new IllegalStateException("Upload is not complete. Missing chunks: " + java.util.Arrays.toString(missingChunks));
         }
-
-        combineChunks(fileId, status.getTotalChunks());
-    }
-
-    private void combineChunks(String fileId, int totalChunks) throws IOException {
-        FileUploadStatus status = fileUploadStatusMap.get(fileId);
-        String fileName = (status != null && status.getFileName() != null) ? status.getFileName() : fileId;
-
-        Path finalFilePath = uploadDir.resolve(fileName);
-        logger.info("Combining {} chunks for fileId: {} into final file: {} (original name: {})",
-                   totalChunks, fileId, finalFilePath, fileName);
 
         try {
-            for (int i = 0; i < totalChunks; i++) {
-                Path chunkPath = uploadDir.resolve(fileId + ".part" + i);
-                if (!Files.exists(chunkPath)) {
-                    throw new FileStorageException("Missing chunk file", fileId, "COMBINE_CHUNKS", "MISSING_CHUNK", null);
-                }
+            // Assemble the file
+            fileAssemblyService.assembleFile(fileId, status.getTotalChunks(), status.getFileName());
 
-                byte[] chunk = Files.readAllBytes(chunkPath);
-                Files.write(finalFilePath, chunk, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-                Files.delete(chunkPath);
-                logger.debug("Combined and deleted chunk {} for fileId: {}", i, fileId);
-            }
+            // Mark as completed
+            uploadStatusService.markAsCompleted(fileId);
 
-            fileUploadStatusMap.remove(fileId);
-            logger.info("Successfully combined all chunks for fileId: {}, final file size: {} bytes",
-                       fileId, Files.size(finalFilePath));
+            // Clean up temporary files
+            chunkStorageService.cleanupTempDirectory(fileId);
 
-        } catch (IOException e) {
-            logger.error("Failed to combine chunks for fileId: {}", fileId, e);
-            throw new FileStorageException("Failed to combine chunks", fileId, "COMBINE_CHUNKS", "COMBINATION_FAILED", e);
+            logger.info("Successfully completed upload for fileId: {}", fileId);
+
+        } catch (Exception e) {
+            uploadStatusService.markAsFailed(fileId, "Failed to complete upload: " + e.getMessage());
+            logger.error("Failed to complete upload for fileId: {}", fileId, e);
+            throw e;
         }
     }
 
-    public FileUploadStatus getUploadStatus(String fileId) {
-        return fileUploadStatusMap.get(fileId);
-    }
-
-    public Collection<FileUploadStatus> getAllUploadStatuses() {
-        return fileUploadStatusMap.values();
-    }
-
-    // Reactive methods for WebFlux
-
     /**
-     * Reactive version of saveChunk that returns a Mono<Void>
+     * Reactive version of saveChunk
      */
     public Mono<Void> saveChunkReactive(String fileId, int chunkNumber, int totalChunks, byte[] chunk) {
         return Mono.fromCallable(() -> {
@@ -140,91 +121,53 @@ public class FileStorageService {
                 return null;
             } catch (IOException e) {
                 logger.error("Reactive save chunk failed for fileId: {}, chunk: {}", fileId, chunkNumber, e);
-                throw new FileStorageException("Failed to save chunk reactively", fileId, "SAVE_CHUNK_REACTIVE", "REACTIVE_SAVE_FAILED", e);
+                throw new RuntimeException("Failed to save chunk reactively", e);
             }
-        })
-        .subscribeOn(Schedulers.boundedElastic()) // Use boundedElastic for I/O operations
-        .then(); // Convert to Mono<Void>
+        });
     }
 
     /**
-     * Reactive version of getUploadStatus that returns a Mono<FileUploadStatus>
-     */
-    public Mono<FileUploadStatus> getUploadStatusReactive(String fileId) {
-        return Mono.fromCallable(() -> getUploadStatus(fileId))
-                .subscribeOn(Schedulers.boundedElastic());
-    }
-
-    /**
-     * Reactive version of getAllUploadStatuses that returns a Flux<FileUploadStatus>
-     */
-    public Flux<FileUploadStatus> getAllUploadStatusesReactive() {
-        return Flux.fromIterable(getAllUploadStatuses())
-                .subscribeOn(Schedulers.boundedElastic());
-    }
-
-    /**
-     * Enhanced reactive method that provides better error handling and validation
-     */
-    public Mono<Void> saveChunkReactiveEnhanced(String fileId, int chunkNumber, int totalChunks, byte[] chunk) {
-        return Mono.fromCallable(() -> {
-            // Validation
-            if (fileId == null || fileId.trim().isEmpty()) {
-                logger.warn("Validation failed: FileId is null or empty");
-                throw new ValidationException("FileId cannot be null or empty", "fileId", fileId);
-            }
-            if (chunkNumber < 0) {
-                logger.warn("Validation failed: Chunk number is negative: {}", chunkNumber);
-                throw new ValidationException("Chunk number cannot be negative", "chunkNumber", chunkNumber);
-            }
-            if (totalChunks <= 0) {
-                logger.warn("Validation failed: Total chunks is not positive: {}", totalChunks);
-                throw new ValidationException("Total chunks must be positive", "totalChunks", totalChunks);
-            }
-            if (chunk == null || chunk.length == 0) {
-                logger.warn("Validation failed: Chunk data is null or empty for fileId: {}", fileId);
-                throw new ValidationException("Chunk data cannot be null or empty", "chunk", chunk != null ? chunk.length : null);
-            }
-
-            try {
-                saveChunk(fileId, chunkNumber, totalChunks, chunk);
-                return null;
-            } catch (IOException e) {
-                logger.error("Enhanced reactive save chunk failed for fileId: {}, chunk: {}", fileId, chunkNumber, e);
-                throw new FileStorageException("Failed to save chunk for fileId: " + fileId + ", chunk: " + chunkNumber,
-                                             fileId, "SAVE_CHUNK_ENHANCED", "ENHANCED_SAVE_FAILED", e);
-            }
-        })
-        .subscribeOn(Schedulers.boundedElastic())
-        .then();
-    }
-
-    /**
-     * Enhanced reactive method with filename support
+     * Enhanced reactive version with filename support
      */
     public Mono<Void> saveChunkReactiveEnhanced(String fileId, int chunkNumber, int totalChunks, byte[] chunk, String fileName) {
-        return Mono.fromCallable(() -> {
-            // Validation
-            if (fileId == null || fileId.trim().isEmpty()) {
-                logger.warn("Validation failed: FileId is null or empty");
-                throw new ValidationException("FileId cannot be null or empty", "fileId", fileId);
-            }
+        return chunkStorageService.saveChunkReactive(fileId, chunkNumber, chunk)
+                .doOnSubscribe(subscription -> {
+                    // Basic validation
+                    if (fileId == null || fileId.trim().isEmpty()) {
+                        throw new IllegalArgumentException("fileId cannot be null or empty");
+                    }
+                    if (chunkNumber < 0) {
+                        throw new IllegalArgumentException("chunkNumber cannot be negative");
+                    }
+                    if (totalChunks <= 0) {
+                        throw new IllegalArgumentException("totalChunks must be positive");
+                    }
+                    if (chunk == null || chunk.length == 0) {
+                        throw new IllegalArgumentException("chunk cannot be null or empty");
+                    }
 
-            try {
-                saveChunk(fileId, chunkNumber, totalChunks, chunk, fileName);
-                return null;
-            } catch (IOException e) {
-                logger.error("Enhanced reactive save chunk with filename failed for fileId: {}, chunk: {}", fileId, chunkNumber, e);
-                throw new FileStorageException("Failed to save chunk for fileId: " + fileId + ", chunk: " + chunkNumber,
-                                             fileId, "SAVE_CHUNK_ENHANCED_WITH_FILENAME", "ENHANCED_SAVE_WITH_FILENAME_FAILED", e);
-            }
-        })
-        .subscribeOn(Schedulers.boundedElastic())
-        .then();
+                    uploadStatusService.getOrCreateUploadStatus(fileId, totalChunks);
+                    if (fileName != null && !fileName.trim().isEmpty()) {
+                        uploadStatusService.setFileName(fileId, fileName);
+                    }
+                    uploadStatusService.addChunk(fileId, chunkNumber);
+                })
+                .doOnSuccess(result -> logger.debug("Reactive chunk {} saved for fileId: {}", chunkNumber, fileId))
+                .doOnError(error -> {
+                    logger.error("Failed to save chunk {} for fileId: {}", chunkNumber, fileId, error);
+                    uploadStatusService.markAsFailed(fileId, "Chunk save failed: " + error.getMessage());
+                });
     }
 
     /**
-     * Reactive version of completeUpload that returns a Mono<Void>
+     * Enhanced reactive version without filename (backward compatibility)
+     */
+    public Mono<Void> saveChunkReactiveEnhanced(String fileId, int chunkNumber, int totalChunks, byte[] chunk) {
+        return saveChunkReactiveEnhanced(fileId, chunkNumber, totalChunks, chunk, null);
+    }
+
+    /**
+     * Reactive version of completeUpload
      */
     public Mono<Void> completeUploadReactive(String fileId) {
         return Mono.fromCallable(() -> {
@@ -233,11 +176,82 @@ public class FileStorageService {
                 return null;
             } catch (IOException e) {
                 logger.error("Reactive complete upload failed for fileId: {}", fileId, e);
-                throw new FileStorageException("Failed to complete upload for fileId: " + fileId,
-                                             fileId, "COMPLETE_UPLOAD_REACTIVE", "REACTIVE_COMPLETE_FAILED", e);
+                throw new RuntimeException("Failed to complete upload reactively", e);
             }
-        })
-        .subscribeOn(Schedulers.boundedElastic())
-        .then();
+        });
+    }
+
+    /**
+     * Gets upload status for a specific file
+     */
+    public FileUploadStatus getUploadStatus(String fileId) {
+        return uploadStatusService.getUploadStatus(fileId);
+    }
+
+    /**
+     * Reactive version of getUploadStatus
+     */
+    public Mono<FileUploadStatus> getUploadStatusReactive(String fileId) {
+        return uploadStatusService.getUploadStatusReactive(fileId);
+    }
+
+    /**
+     * Gets all upload statuses
+     */
+    public Collection<FileUploadStatus> getAllUploadStatuses() {
+        return uploadStatusService.getAllUploadStatuses();
+    }
+
+    /**
+     * Reactive version of getAllUploadStatuses
+     */
+    public Flux<FileUploadStatus> getAllUploadStatusesReactive() {
+        return uploadStatusService.getAllUploadStatusesReactive();
+    }
+
+    /**
+     * Cleans up temporary directory for a specific fileId
+     */
+    public void cleanupTempDirectory(String fileId) {
+        chunkStorageService.cleanupTempDirectory(fileId);
+        uploadStatusService.removeUploadStatus(fileId);
+    }
+
+    /**
+     * Reactive version of cleanup
+     */
+    public Mono<Void> cleanupTempDirectoryReactive(String fileId) {
+        return chunkStorageService.cleanupTempDirectoryReactive(fileId)
+                .doOnSuccess(result -> uploadStatusService.removeUploadStatus(fileId));
+    }
+
+    /**
+     * Checks if all chunks have been received for a file
+     */
+    public boolean areAllChunksReceived(String fileId) {
+        return uploadStatusService.isUploadComplete(fileId);
+    }
+
+    /**
+     * Gets missing chunk numbers for a file
+     */
+    public int[] getMissingChunks(String fileId) {
+        return uploadStatusService.getMissingChunks(fileId);
+    }
+
+    /**
+     * Gets upload progress as percentage
+     */
+    public double getUploadProgress(String fileId) {
+        return uploadStatusService.getUploadProgress(fileId);
+    }
+
+    /**
+     * Validates if a file can be completed
+     */
+    public boolean canCompleteUpload(String fileId) {
+        FileUploadStatus status = uploadStatusService.getUploadStatus(fileId);
+        return status != null && uploadStatusService.isUploadComplete(fileId) &&
+               fileAssemblyService.canAssemble(fileId, status.getTotalChunks());
     }
 }

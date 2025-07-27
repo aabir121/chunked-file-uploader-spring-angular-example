@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.http.codec.multipart.FilePart;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import com.example.largeupload.exception.ValidationException;
 import com.example.largeupload.exception.FileStorageException;
@@ -28,7 +29,6 @@ import java.util.Collection;
 
 @RestController
 @RequestMapping("/upload")
-@CrossOrigin(origins = {"http://localhost:4200", "http://localhost:4201"})
 @Tag(name = "File Upload", description = "API for uploading large files in chunks")
 public class FileUploadController {
 
@@ -78,28 +78,8 @@ public class FileUploadController {
             return Mono.error(new ValidationException("file is required", "file", null));
         }
 
-        return Mono.just(file)
-                .flatMap(f -> f.content()
-                    .reduce(DataBuffer::write)
-                    .map(dataBuffer -> {
-                        byte[] bytes = new byte[dataBuffer.readableByteCount()];
-                        dataBuffer.read(bytes);
-                        DataBufferUtils.release(dataBuffer);
-                        return bytes;
-                    }))
-                .flatMap(fileBytes -> {
-                    try {
-                        int chunkNum = Integer.parseInt(chunkNumber);
-                        int totalChunksNum = Integer.parseInt(totalChunks);
-                        // Use the original filename parameter, not the chunk filename
-                        return fileStorageService.saveChunkReactiveEnhanced(fileId, chunkNum, totalChunksNum, fileBytes, fileName);
-                    } catch (NumberFormatException e) {
-                        logger.warn("Invalid number format for fileId: {}, chunkNumber: {}, totalChunks: {}",
-                                  fileId, chunkNumber, totalChunks, e);
-                        return Mono.error(new ValidationException("Invalid number format: " + e.getMessage(),
-                                                                "chunkNumber/totalChunks", chunkNumber + "/" + totalChunks));
-                    }
-                })
+        return filePartToBytes(file)
+                .flatMap(fileBytes -> processChunk(fileId, chunkNumber, totalChunks, fileBytes, fileName))
                 .then(Mono.just(ResponseEntity.ok().<Void>build()))
                 .doOnSuccess(response -> logger.info("Chunk saved successfully for fileId: {}, chunk: {}", 
                                                    fileId, chunkNumber));
@@ -122,7 +102,7 @@ public class FileUploadController {
         logger.info("Received reactive upload request - fileId: {}, chunkNumber: {}, totalChunks: {}",
                    fileId, chunkNumber, totalChunks);
 
-        // Validate parameters first - let global handler manage the response
+        // Validation
         if (fileId == null || fileId.trim().isEmpty()) {
             return Mono.error(new ValidationException("fileId is required", "fileId", fileId));
         }
@@ -196,34 +176,18 @@ public class FileUploadController {
 
         // Validation
         if (fileId == null || fileId.trim().isEmpty()) {
-            return Mono.error(new ValidationException("X-File-Id header is required", "fileId", fileId));
+            return Mono.error(new ValidationException("fileId is required", "fileId", fileId));
         }
         if (chunkNumber == null || chunkNumber.trim().isEmpty()) {
-            return Mono.error(new ValidationException("X-Chunk-Number header is required", "chunkNumber", chunkNumber));
+            return Mono.error(new ValidationException("chunkNumber is required", "chunkNumber", chunkNumber));
         }
         if (totalChunks == null || totalChunks.trim().isEmpty()) {
-            return Mono.error(new ValidationException("X-Total-Chunks header is required", "totalChunks", totalChunks));
+            return Mono.error(new ValidationException("totalChunks is required", "totalChunks", totalChunks));
         }
 
         return body
-                .map(dataBuffer -> {
-                    byte[] bytes = new byte[dataBuffer.readableByteCount()];
-                    dataBuffer.read(bytes);
-                    DataBufferUtils.release(dataBuffer);
-                    return bytes;
-                })
-                .flatMap(fileBytes -> {
-                    try {
-                        int chunkNum = Integer.parseInt(chunkNumber);
-                        int totalChunksNum = Integer.parseInt(totalChunks);
-                        return fileStorageService.saveChunkReactiveEnhanced(fileId, chunkNum, totalChunksNum, fileBytes, fileName);
-                    } catch (NumberFormatException e) {
-                        logger.warn("Invalid number format in binary upload for fileId: {}, chunkNumber: {}, totalChunks: {}",
-                                   fileId, chunkNumber, totalChunks, e);
-                        return Mono.error(new ValidationException("Invalid number format: " + e.getMessage(),
-                                                                 "chunkNumber/totalChunks", chunkNumber + "/" + totalChunks));
-                    }
-                })
+                .map(this::dataBufferToBytes)
+                .flatMap(fileBytes -> processChunk(fileId, chunkNumber, totalChunks, fileBytes, fileName))
                 .then(Mono.just(ResponseEntity.ok().<Void>build()))
                 .doOnSuccess(response -> logger.info("Binary chunk saved successfully for fileId: {}, chunk: {}", fileId, chunkNumber));
     }
@@ -259,6 +223,28 @@ public class FileUploadController {
                 });
     }
 
+    @Operation(summary = "Cancel upload",
+            description = "Cancels an ongoing file upload and cleans up temporary files.",
+            responses = {
+                    @ApiResponse(responseCode = "200", description = "Upload cancelled successfully"),
+                    @ApiResponse(responseCode = "404", description = "Upload not found")
+            })
+    @DeleteMapping("/{fileId}")
+    public Mono<ResponseEntity<Void>> cancelUpload(
+            @Parameter(description = "Unique identifier for the file") @PathVariable String fileId) {
+
+        logger.info("Received cancel upload request for fileId: {}", fileId);
+
+        return Mono.fromRunnable(() -> fileStorageService.cleanupTempDirectory(fileId))
+                .subscribeOn(Schedulers.boundedElastic())
+                .then(Mono.just(ResponseEntity.ok().<Void>build()))
+                .doOnSuccess(response -> logger.info("Upload cancelled successfully for fileId: {}", fileId))
+                .onErrorResume(Exception.class, e -> {
+                    logger.error("Error cancelling upload for fileId: {}: {}", fileId, e.getMessage(), e);
+                    return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).<Void>build());
+                });
+    }
+
     @Operation(summary = "Get all uploads",
             description = "Retrieves the status of all ongoing file uploads.",
             responses = {
@@ -269,5 +255,45 @@ public class FileUploadController {
     @GetMapping
     public Flux<FileUploadStatus> getAllUploads() {
         return fileStorageService.getAllUploadStatusesReactive();
+    }
+
+    /**
+     * Helper method to process chunk data and save it
+     */
+    private Mono<Void> processChunk(String fileId, String chunkNumber, String totalChunks, byte[] chunkData, String fileName) {
+        try {
+            int chunkNum = Integer.parseInt(chunkNumber);
+            int totalChunksNum = Integer.parseInt(totalChunks);
+            return fileStorageService.saveChunkReactiveEnhanced(fileId, chunkNum, totalChunksNum, chunkData, fileName);
+        } catch (NumberFormatException e) {
+            logger.warn("Invalid number format for fileId: {}, chunkNumber: {}, totalChunks: {}",
+                       fileId, chunkNumber, totalChunks, e);
+            return Mono.error(new ValidationException("Invalid number format: " + e.getMessage(),
+                                                     "chunkNumber/totalChunks", chunkNumber + "/" + totalChunks));
+        }
+    }
+
+    /**
+     * Helper method to convert FilePart to byte array
+     */
+    private Mono<byte[]> filePartToBytes(FilePart filePart) {
+        return filePart.content()
+                .reduce(DataBuffer::write)
+                .map(dataBuffer -> {
+                    byte[] bytes = new byte[dataBuffer.readableByteCount()];
+                    dataBuffer.read(bytes);
+                    DataBufferUtils.release(dataBuffer);
+                    return bytes;
+                });
+    }
+
+    /**
+     * Helper method to convert DataBuffer to byte array
+     */
+    private byte[] dataBufferToBytes(DataBuffer dataBuffer) {
+        byte[] bytes = new byte[dataBuffer.readableByteCount()];
+        dataBuffer.read(bytes);
+        DataBufferUtils.release(dataBuffer);
+        return bytes;
     }
 }

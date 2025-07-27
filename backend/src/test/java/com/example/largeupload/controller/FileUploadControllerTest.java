@@ -1,29 +1,31 @@
 package com.example.largeupload.controller;
 
+import com.example.largeupload.config.FileUploadConfiguration;
 import com.example.largeupload.model.FileUploadStatus;
 import com.example.largeupload.service.FileStorageService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.context.annotation.Import;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.util.Arrays;
-import java.util.HashSet;
+
 
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.when;
 
 @WebFluxTest(FileUploadController.class)
+@Import(FileUploadConfiguration.class)
 class FileUploadControllerTest {
 
     @Autowired
     private WebTestClient webTestClient;
 
-    @MockBean
+    @MockitoBean
     private FileStorageService fileStorageService;
 
     @Test
@@ -95,7 +97,7 @@ class FileUploadControllerTest {
     @Test
     void uploadChunk_WithValidParameters_ShouldReturnOk() {
         // Given
-        when(fileStorageService.saveChunkReactiveEnhanced(anyString(), anyInt(), anyInt(), any(byte[].class)))
+        when(fileStorageService.saveChunkReactiveEnhanced(anyString(), anyInt(), anyInt(), any(byte[].class), anyString()))
                 .thenReturn(Mono.empty());
 
         // Create proper multipart data
@@ -109,6 +111,9 @@ class FileUploadControllerTest {
                 "--" + boundary + "\r\n" +
                 "Content-Disposition: form-data; name=\"totalChunks\"\r\n\r\n" +
                 "5\r\n" +
+                "--" + boundary + "\r\n" +
+                "Content-Disposition: form-data; name=\"fileName\"\r\n\r\n" +
+                "test.txt\r\n" +
                 "--" + boundary + "\r\n" +
                 "Content-Disposition: form-data; name=\"file\"; filename=\"test.txt\"\r\n" +
                 "Content-Type: text/plain\r\n\r\n" +
