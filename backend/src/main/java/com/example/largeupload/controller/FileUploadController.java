@@ -1,0 +1,238 @@
+package com.example.largeupload.controller;
+
+import com.example.largeupload.model.FileUploadStatus;
+import com.example.largeupload.service.FileStorageService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.core.io.buffer.DataBuffer;
+import org.springframework.core.io.buffer.DataBufferUtils;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.codec.multipart.Part;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.http.codec.multipart.FilePart;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+
+import com.example.largeupload.exception.ValidationException;
+
+import java.util.Collection;
+
+@RestController
+@RequestMapping("/upload")
+@CrossOrigin(origins = {"http://localhost:4200", "http://localhost:4201"})
+@Tag(name = "File Upload", description = "API for uploading large files in chunks")
+public class FileUploadController {
+
+    private static final Logger logger = LoggerFactory.getLogger(FileUploadController.class);
+    private final FileStorageService fileStorageService;
+
+    public FileUploadController(FileStorageService fileStorageService) {
+        this.fileStorageService = fileStorageService;
+    }
+
+    @PostMapping("/test")
+    public Mono<ResponseEntity<String>> testEndpoint() {
+        logger.info("Test endpoint reached!");
+        return Mono.just(ResponseEntity.ok("Test endpoint working"));
+    }
+
+    @Operation(summary = "Upload a file chunk",
+            description = "Uploads a single chunk of a large file. The file is identified by a unique fileId.",
+            responses = {
+                    @ApiResponse(responseCode = "200", description = "Chunk uploaded successfully"),
+                    @ApiResponse(responseCode = "400", description = "Bad request - invalid parameters"),
+                    @ApiResponse(responseCode = "500", description = "Internal server error")
+            })
+    @PostMapping(value = "", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public Mono<ResponseEntity<Void>> uploadChunk(
+            @Parameter(description = "The file chunk") @RequestPart("file") FilePart file,
+            @Parameter(description = "Unique identifier for the file") @RequestPart("fileId") String fileId,
+            @Parameter(description = "The chunk number (0-based)") @RequestPart("chunkNumber") String chunkNumber,
+            @Parameter(description = "Total number of chunks for the file") @RequestPart("totalChunks") String totalChunks) {
+
+        logger.info("Received upload request - fileId: {}, chunkNumber: {}, totalChunks: {}, file: {}",
+                   fileId, chunkNumber, totalChunks,
+                   (file != null ? file.filename() : "null"));
+
+        // Validation - let the service handle detailed validation
+        if (fileId == null || fileId.trim().isEmpty()) {
+            return Mono.error(new ValidationException("fileId is required", "fileId", fileId));
+        }
+        if (chunkNumber == null || chunkNumber.trim().isEmpty()) {
+            return Mono.error(new ValidationException("chunkNumber is required", "chunkNumber", chunkNumber));
+        }
+        if (totalChunks == null || totalChunks.trim().isEmpty()) {
+            return Mono.error(new ValidationException("totalChunks is required", "totalChunks", totalChunks));
+        }
+        if (file == null) {
+            return Mono.error(new ValidationException("file is required", "file", null));
+        }
+
+        return Mono.just(file)
+                .flatMap(f -> f.content()
+                    .reduce(DataBuffer::write)
+                    .map(dataBuffer -> {
+                        byte[] bytes = new byte[dataBuffer.readableByteCount()];
+                        dataBuffer.read(bytes);
+                        DataBufferUtils.release(dataBuffer);
+                        return bytes;
+                    }))
+                .flatMap(fileBytes -> {
+                    try {
+                        int chunkNum = Integer.parseInt(chunkNumber);
+                        int totalChunksNum = Integer.parseInt(totalChunks);
+                        return fileStorageService.saveChunkReactiveEnhanced(fileId, chunkNum, totalChunksNum, fileBytes);
+                    } catch (NumberFormatException e) {
+                        logger.warn("Invalid number format for fileId: {}, chunkNumber: {}, totalChunks: {}",
+                                  fileId, chunkNumber, totalChunks, e);
+                        return Mono.error(new ValidationException("Invalid number format: " + e.getMessage(),
+                                                                "chunkNumber/totalChunks", chunkNumber + "/" + totalChunks));
+                    }
+                })
+                .then(Mono.just(ResponseEntity.ok().<Void>build()))
+                .doOnSuccess(response -> logger.info("Chunk saved successfully for fileId: {}, chunk: {}", 
+                                                   fileId, chunkNumber));
+    }
+
+    @Operation(summary = "Upload a file chunk (Fully Reactive)",
+            description = "Uploads a single chunk of a large file using reactive streams. This is the preferred method for WebFlux.",
+            responses = {
+                    @ApiResponse(responseCode = "200", description = "Chunk uploaded successfully"),
+                    @ApiResponse(responseCode = "400", description = "Bad request - invalid parameters"),
+                    @ApiResponse(responseCode = "500", description = "Internal server error")
+            })
+    @PostMapping(value = "/reactive", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public Mono<ResponseEntity<Void>> uploadChunkReactive(
+            @Parameter(description = "The file chunk") @RequestPart("file") Mono<Part> filePart,
+            @Parameter(description = "Unique identifier for the file") @RequestPart("fileId") String fileId,
+            @Parameter(description = "The chunk number (0-based)") @RequestPart("chunkNumber") String chunkNumber,
+            @Parameter(description = "Total number of chunks for the file") @RequestPart("totalChunks") String totalChunks) {
+
+        logger.info("Received reactive upload request - fileId: {}, chunkNumber: {}, totalChunks: {}",
+                   fileId, chunkNumber, totalChunks);
+
+        // Validate parameters first - let global handler manage the response
+        if (fileId == null || fileId.trim().isEmpty()) {
+            return Mono.error(new ValidationException("fileId is required", "fileId", fileId));
+        }
+        if (chunkNumber == null || chunkNumber.trim().isEmpty()) {
+            return Mono.error(new ValidationException("chunkNumber is required", "chunkNumber", chunkNumber));
+        }
+        if (totalChunks == null || totalChunks.trim().isEmpty()) {
+            return Mono.error(new ValidationException("totalChunks is required", "totalChunks", totalChunks));
+        }
+
+        return filePart
+                .flatMap(part -> {
+                    // Read the part content as bytes
+                    return part.content()
+                            .reduce(DataBuffer::write)
+                            .map(dataBuffer -> {
+                                byte[] bytes = new byte[dataBuffer.readableByteCount()];
+                                dataBuffer.read(bytes);
+                                DataBufferUtils.release(dataBuffer);
+                                return bytes;
+                            });
+                })
+                .flatMap(fileBytes -> {
+                    try {
+                        int chunkNum = Integer.parseInt(chunkNumber);
+                        int totalChunksNum = Integer.parseInt(totalChunks);
+                        return fileStorageService.saveChunkReactiveEnhanced(fileId, chunkNum, totalChunksNum, fileBytes);
+                    } catch (NumberFormatException e) {
+                        logger.warn("Invalid number format in reactive upload for fileId: {}, chunkNumber: {}, totalChunks: {}",
+                                   fileId, chunkNumber, totalChunks, e);
+                        return Mono.error(new ValidationException("Invalid number format: " + e.getMessage(),
+                                                                 "chunkNumber/totalChunks", chunkNumber + "/" + totalChunks));
+                    }
+                })
+                .then(Mono.just(ResponseEntity.ok().<Void>build()))
+                .doOnSuccess(response -> logger.info("Reactive chunk saved successfully for fileId: {}, chunk: {}", fileId, chunkNumber));
+    }
+
+    @Operation(summary = "Get upload status",
+            description = "Retrieves the upload status for a specific file, including the list of received chunks.",
+            responses = {
+                    @ApiResponse(responseCode = "200", description = "Status retrieved successfully",
+                            content = @Content(mediaType = "application/json",
+                                    schema = @Schema(implementation = FileUploadStatus.class))),
+                    @ApiResponse(responseCode = "404", description = "File not found")
+            })
+    @GetMapping("/{fileId}")
+    public Mono<ResponseEntity<FileUploadStatus>> getUploadStatus(
+            @Parameter(description = "Unique identifier for the file") @PathVariable String fileId) {
+        return fileStorageService.getUploadStatusReactive(fileId)
+                .map(ResponseEntity::ok)
+                .defaultIfEmpty(ResponseEntity.notFound().build());
+    }
+
+    @Operation(summary = "Upload a file chunk (Binary)",
+            description = "Uploads a single chunk as raw binary data. More efficient for large chunks.",
+            responses = {
+                    @ApiResponse(responseCode = "200", description = "Chunk uploaded successfully"),
+                    @ApiResponse(responseCode = "400", description = "Invalid request parameters")
+            })
+    @PostMapping(value = "/binary", consumes = "application/octet-stream")
+    public Mono<ResponseEntity<Void>> uploadChunkBinary(
+            @Parameter(description = "Unique identifier for the file") @RequestHeader("X-File-Id") String fileId,
+            @Parameter(description = "The chunk number (0-based)") @RequestHeader("X-Chunk-Number") String chunkNumber,
+            @Parameter(description = "Total number of chunks for the file") @RequestHeader("X-Total-Chunks") String totalChunks,
+            @Parameter(description = "Original filename") @RequestHeader("X-File-Name") String fileName,
+            @RequestBody Mono<DataBuffer> body) {
+
+        logger.info("Received binary upload request - fileId: {}, chunkNumber: {}, totalChunks: {}, fileName: {}",
+                   fileId, chunkNumber, totalChunks, fileName);
+
+        // Validation
+        if (fileId == null || fileId.trim().isEmpty()) {
+            return Mono.error(new ValidationException("X-File-Id header is required", "fileId", fileId));
+        }
+        if (chunkNumber == null || chunkNumber.trim().isEmpty()) {
+            return Mono.error(new ValidationException("X-Chunk-Number header is required", "chunkNumber", chunkNumber));
+        }
+        if (totalChunks == null || totalChunks.trim().isEmpty()) {
+            return Mono.error(new ValidationException("X-Total-Chunks header is required", "totalChunks", totalChunks));
+        }
+
+        return body
+                .map(dataBuffer -> {
+                    byte[] bytes = new byte[dataBuffer.readableByteCount()];
+                    dataBuffer.read(bytes);
+                    DataBufferUtils.release(dataBuffer);
+                    return bytes;
+                })
+                .flatMap(fileBytes -> {
+                    try {
+                        int chunkNum = Integer.parseInt(chunkNumber);
+                        int totalChunksNum = Integer.parseInt(totalChunks);
+                        return fileStorageService.saveChunkReactiveEnhanced(fileId, chunkNum, totalChunksNum, fileBytes);
+                    } catch (NumberFormatException e) {
+                        logger.warn("Invalid number format in binary upload for fileId: {}, chunkNumber: {}, totalChunks: {}",
+                                   fileId, chunkNumber, totalChunks, e);
+                        return Mono.error(new ValidationException("Invalid number format: " + e.getMessage(),
+                                                                 "chunkNumber/totalChunks", chunkNumber + "/" + totalChunks));
+                    }
+                })
+                .then(Mono.just(ResponseEntity.ok().<Void>build()))
+                .doOnSuccess(response -> logger.info("Binary chunk saved successfully for fileId: {}, chunk: {}", fileId, chunkNumber));
+    }
+
+    @Operation(summary = "Get all uploads",
+            description = "Retrieves the status of all ongoing file uploads.",
+            responses = {
+                    @ApiResponse(responseCode = "200", description = "Statuses retrieved successfully",
+                            content = @Content(mediaType = "application/json",
+                                    schema = @Schema(implementation = Collection.class)))
+            })
+    @GetMapping
+    public Flux<FileUploadStatus> getAllUploads() {
+        return fileStorageService.getAllUploadStatusesReactive();
+    }
+}
